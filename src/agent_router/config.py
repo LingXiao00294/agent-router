@@ -37,6 +37,7 @@ class ProviderConfig(BaseModel):
     """
 
     type: Literal["anthropic", "openai"]
+    name: str = ""
     model: str
     api_key: str
     base_url: str
@@ -125,17 +126,17 @@ def load_config(config_path: str | Path) -> AppConfig:
                 sys.exit(1)
             if provider_name not in providers:
                 print(
-                    f"错误: 模型 '{virtual_name}' 引用了未知 provider '{provider_name}'，"
-                    f"已知 provider: {', '.join(providers.keys())}",
+                    f"警告: 模型 '{virtual_name}' 引用了未知 provider '{provider_name}'，已自动跳过",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                continue
 
             pdef = providers[provider_name]
             try:
                 resolved.append(
                     ProviderConfig(
                         type=pdef.type,
+                        name=provider_name,
                         model=ref["model"],
                         api_key=pdef.api_key,
                         base_url=pdef.base_url,
@@ -150,6 +151,12 @@ def load_config(config_path: str | Path) -> AppConfig:
                 )
                 sys.exit(1)
 
+        if not resolved:
+            print(
+                f"警告: 模型 '{virtual_name}' 没有有效的 provider，已跳过",
+                file=sys.stderr,
+            )
+            continue
         resolved.sort(key=lambda p: p.priority)
         models[virtual_name] = resolved
 

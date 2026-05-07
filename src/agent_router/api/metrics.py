@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from agent_router.db import CallStore
 
@@ -15,6 +15,10 @@ def create_metrics_router(store: CallStore) -> APIRouter:
     @router.get("/api/metrics/by-model")
     async def by_model():
         return await store.by_model()
+
+    @router.get("/api/metrics/by-real-model")
+    async def by_real_model():
+        return await store.by_real_model()
 
     @router.get("/api/metrics/by-provider")
     async def by_provider():
@@ -43,7 +47,7 @@ def create_metrics_router(store: CallStore) -> APIRouter:
     async def get_call(call_id: str):
         call = await store.get_call(call_id)
         if call is None:
-            return {"error": "not found"}, 404
+            raise HTTPException(status_code=404, detail="call not found")
         return call
 
     return router

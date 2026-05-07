@@ -71,8 +71,8 @@ class TestAnthropicCompatProvider:
             await provider.send({"model": "test", "max_tokens": 10, "messages": []})
 
     @pytest.mark.asyncio
-    async def test_send_non_retryable_401(self, http_client):
-        """测试 HTTP 401 (鉴权失败) 触发不可重试错误."""
+    async def test_send_retryable_401(self, http_client):
+        """测试 HTTP 401 (鉴权失败) 触发可重试错误，允许路由切换 provider."""
         config = ProviderConfig(
             type="anthropic",
             model="test",
@@ -81,7 +81,7 @@ class TestAnthropicCompatProvider:
             priority=1,
         )
         provider = AnthropicCompatProvider(config, http_client)
-        with pytest.raises(NonRetryableError):
+        with pytest.raises(RetryableError):
             await provider.send({"model": "test", "max_tokens": 10, "messages": []})
 
     def test_strip_trailing_slash(self):

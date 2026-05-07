@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 
 import httpx
 from structlog import get_logger
 
-from agent_router.config import ProviderConfig
 from agent_router.providers.base import BaseProvider, NonRetryableError, RetryableError
 
 logger = get_logger(__name__)
 
-RETRYABLE_STATUSES: set[int] = {429, 500, 502, 503, 504}
+RETRYABLE_STATUSES: set[int] = {401, 403, 429, 500, 502, 503, 504}
 RETRYABLE_EXCEPTIONS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -78,6 +76,7 @@ class AnthropicCompatProvider(BaseProvider):
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
+                    await e.response.aread()
                     raise _classify_error(e)
 
                 async for chunk in response.aiter_bytes():
@@ -90,9 +89,7 @@ class AnthropicCompatProvider(BaseProvider):
     def _build_headers(self, request_body: dict) -> dict:
         headers = {
             "Content-Type": "application/json",
-            "anthropic-version": request_body.get(
-                "anthropic_version", "2023-06-01"
-            ),
+            "anthropic-version": request_body.get("anthropic_version", "2023-06-01"),
         }
         # 尝试多种认证 header 格式
         if self.config.api_key.startswith("sk-ant"):

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS calls (
     id              TEXT PRIMARY KEY,
     timestamp       TEXT NOT NULL,
     virtual_model   TEXT NOT NULL,
+    provider_name   TEXT,
     provider_type   TEXT,
     provider_model  TEXT,
     provider_url    TEXT,
@@ -63,6 +64,7 @@ class CallStore:
         *,
         virtual_model: str,
         status: str,
+        provider_name: str | None = None,
         provider_type: str | None = None,
         provider_model: str | None = None,
         provider_url: str | None = None,
@@ -87,13 +89,13 @@ class CallStore:
 
         await self._conn.execute(
             """INSERT INTO calls (
-                id, timestamp, virtual_model, provider_type, provider_model,
+                id, timestamp, virtual_model, provider_name, provider_type, provider_model,
                 provider_url, attempt, latency_ms, request_body, request_tokens,
                 status, error_type, error_message, response_body,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                call_id, now, virtual_model, provider_type, provider_model,
+                call_id, now, virtual_model, provider_name, provider_type, provider_model,
                 provider_url, attempt, latency_ms, req_json, request_tokens,
                 status, error_type, error_message, resp_json,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
@@ -180,6 +182,20 @@ class CallStore:
                 COUNT(*) AS count,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count
             FROM calls GROUP BY provider_type"""
+        )
+        return [dict(r) for r in rows]
+
+    async def by_real_model(self) -> list[dict]:
+        rows = await self._conn.execute_fetchall(
+            """SELECT
+                COALESCE(provider_model, 'unknown') AS model,
+                COUNT(*) AS count,
+                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+                SUM(input_tokens) AS total_input_tokens,
+                SUM(output_tokens) AS total_output_tokens,
+                SUM(cost_usd) AS total_cost_usd
+            FROM calls WHERE provider_model IS NOT NULL
+            GROUP BY provider_model"""
         )
         return [dict(r) for r in rows]
 

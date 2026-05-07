@@ -223,8 +223,9 @@ priority = 1
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(SystemExit):
-                load_config(path)
+            config = load_config(path)
+            # 未知 provider 被自动跳过，模型为空不应报错
+            assert "test" not in config.models
         finally:
             path.unlink()
 

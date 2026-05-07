@@ -54,7 +54,7 @@ def main() -> None:
     # 延迟导入，确保日志已配置
     from agent_router.app import create_app
 
-    app = create_app(config, store)
+    app = create_app(config, store, config_path=args.config)
 
     print(f"Agent Router 启动: http://{config.server.host}:{config.server.port}")
     print(f"配置文件: {args.config}")
