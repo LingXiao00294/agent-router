@@ -34,8 +34,8 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 - `Router` 接收虚拟模型名，按优先级遍历 provider 列表
 - 成功时返回第一个 provider 的响应，失败时尝试下一个（可重试错误）或立即失败（不可重试错误）
 - 支持流式（`route_stream` → `AsyncIterator[bytes]`）和非流式（`route_non_stream` → `dict`）
-- `RetryableError`: 5xx、429、连接/超时错误 → 故障转移
-- `NonRetryableError`: 4xx（不含 429）、协议错误 → 立即失败
+- `RetryableError`: 401、403、429、5xx、连接/超时错误 → 故障转移
+- `NonRetryableError`: 4xx（不含 401/403/429）、协议错误 → 立即失败
 
 ### Provider 层 (`providers/`)
 - `BaseProvider`: 抽象基类，定义 `send()` 和 `send_stream()` 接口
