@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import tomllib
 from copy import deepcopy
@@ -16,6 +15,20 @@ def _mask_key(key: str) -> str:
     return key[:4] + "*" * (len(key) - 8) + key[-4:]
 
 
+def _is_key_masked(api_key: str) -> bool:
+    """检查 api_key 是否为空、占位符或已脱敏."""
+    if not api_key or api_key == "${PLACEHOLDER}":
+        return True
+    if re.match(r"^\*+$", api_key):
+        return True
+    # _mask_key 产物: 前4 + 星号 + 后4
+    if len(api_key) > 8:
+        middle = api_key[4:-4]
+        if middle and all(c == "*" for c in middle):
+            return True
+    return False
+
+
 def _read_config_raw(config_path: str) -> dict:
     path = Path(config_path)
     if not path.exists():
@@ -24,8 +37,36 @@ def _read_config_raw(config_path: str) -> dict:
         return tomllib.load(f)
 
 
+def _toml_escape(s: str) -> str:
+    """转义 TOML basic string 中的特殊字符."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+def _toml_key(name: str) -> str:
+    """返回正确引用的 TOML key，处理含 . [] 等的名称."""
+    if re.match(r"^[A-Za-z0-9_-]+$", name):
+        return name
+    return f'"{_toml_escape(name)}"'
+
+
+def _toml_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return f'"{_toml_escape(v)}"'
+    if isinstance(v, (int, float)):
+        return str(v)
+    return f'"{_toml_escape(str(v))}"'
+
+
 def _write_toml(config_path: str, data: dict) -> None:
-    """将结构化配置写回 TOML 文件."""
+    """将结构化配置原子写入 TOML 文件."""
     lines: list[str] = []
 
     # [server]
@@ -33,13 +74,13 @@ def _write_toml(config_path: str, data: dict) -> None:
     lines.append("[server]")
     for k in ["host", "port", "log_level"]:
         if k in server:
-            lines.append(f'{k} = {_toml_value(server[k])}')
+            lines.append(f"{k} = {_toml_value(server[k])}")
     lines.append("")
 
     # [providers.*]
     providers = data.get("providers", {})
     for name, pdata in providers.items():
-        lines.append(f"[providers.{name}]")
+        lines.append(f"[providers.{_toml_key(name)}]")
         for k in ["type", "api_key", "base_url", "timeout_seconds"]:
             if k in pdata:
                 lines.append(f"{k} = {_toml_value(pdata[k])}")
@@ -49,24 +90,17 @@ def _write_toml(config_path: str, data: dict) -> None:
     models = data.get("models", {})
     for vname, refs in models.items():
         for ref in refs:
-            lines.append(f"[[models.{vname}]]")
+            lines.append(f"[[models.{_toml_key(vname)}]]")
             for k in ["provider", "model", "priority"]:
                 if k in ref:
                     lines.append(f"{k} = {_toml_value(ref[k])}")
             lines.append("")
 
-    with open(config_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-def _toml_value(v: Any) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, str):
-        return f'"{v}"'
-    if isinstance(v, (int, float)):
-        return str(v)
-    return f'"{v}"'
+    content = "\n".join(lines) + "\n"
+    tmp_path = Path(config_path).with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        f.write(content)
+    tmp_path.replace(config_path)
 
 
 def create_config_router(config_path: str) -> APIRouter:
@@ -120,20 +154,20 @@ def create_config_router(config_path: str) -> APIRouter:
         api_key 为空或脱敏值时保留原有值，防止误覆盖.
         """
         try:
-            # 读取现有配置以保留敏感字段
             existing = _read_config_raw(config_path)
             existing_providers = existing.get("providers", {})
             for pname, pdata in body.get("providers", {}).items():
                 api_key = pdata.get("api_key", "")
-                # 空值、占位符、脱敏值 → 保留原来
-                if (
-                    not api_key
-                    or api_key == "${PLACEHOLDER}"
-                    or re.match(r"^\*+$", api_key)
-                    or (len(api_key) > 4 and api_key[4:-4].count("*") >= 4)
-                ):
+                if _is_key_masked(api_key):
                     if pname in existing_providers:
-                        pdata["api_key"] = existing_providers[pname].get("api_key", api_key)
+                        pdata["api_key"] = existing_providers[pname].get(
+                            "api_key", api_key
+                        )
+                    else:
+                        raise HTTPException(
+                            400,
+                            f"新建 provider '{pname}' 需要提供有效的 api_key",
+                        )
 
             _write_toml(config_path, body)
         except HTTPException:
