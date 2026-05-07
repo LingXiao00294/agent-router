@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-router"
+version = "0.1.0"
+description = "本地 LLM API 路由代理 - 虚拟模型名映射多 provider，优先级故障转移"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "httpx>=0.28",
+    "pydantic>=2",
+    "structlog>=25",
+    "aiosqlite>=0.21",
+    "orjson>=3",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+agent-router = "agent_router.main:main"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_router"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-httpx>=0.36.2",
+]
