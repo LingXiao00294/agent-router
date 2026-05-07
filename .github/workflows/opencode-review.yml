@@ -19,10 +19,10 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: ${{ vars.OPENROUTER_MODEL }}
+          model: ${{ vars.OPENCODE_MODEL }}
           use_github_token: true
           prompt: |
             Review this pull request:
