@@ -1,0 +1,110 @@
+<template>
+  <Teleport to="body">
+    <div v-if="call" class="modal-overlay" @click.self="$emit('close')">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>调用详情</h3>
+          <button @click="$emit('close')" class="close-btn">&times;</button>
+        </div>
+
+        <div class="detail-grid">
+          <div class="kv"><span class="key">ID</span><span class="value">{{ call.id }}</span></div>
+          <div class="kv"><span class="key">时间</span><span class="value">{{ fmt(call.timestamp) }}</span></div>
+          <div class="kv"><span class="key">虚拟模型</span><span class="value">{{ call.virtual_model }}</span></div>
+          <div class="kv"><span class="key">Provider</span><span class="value">{{ call.provider_type || "-" }}</span></div>
+          <div class="kv"><span class="key">真实模型</span><span class="value">{{ call.provider_model || "-" }}</span></div>
+          <div class="kv"><span class="key">尝试次数</span><span class="value">{{ call.attempt }}</span></div>
+          <div class="kv">
+            <span class="key">状态</span>
+            <span class="value" :class="call.status === 'success' ? 'text-green' : 'text-red'">
+              {{ call.status }}
+            </span>
+          </div>
+          <div class="kv"><span class="key">延迟</span><span class="value">{{ call.latency_ms }}ms</span></div>
+          <div class="kv"><span class="key">输入 Token</span><span class="value">{{ call.input_tokens ?? "-" }}</span></div>
+          <div class="kv"><span class="key">输出 Token</span><span class="value">{{ call.output_tokens ?? "-" }}</span></div>
+          <div class="kv"><span class="key">Cache 读取</span><span class="value">{{ call.cache_read_tokens ?? "-" }}</span></div>
+          <div class="kv"><span class="key">Cache 写入</span><span class="value">{{ call.cache_write_tokens ?? "-" }}</span></div>
+          <div class="kv"><span class="key">费用</span><span class="value">${{ (call.cost_usd || 0).toFixed(6) }}</span></div>
+        </div>
+
+        <div v-if="call.error_message" class="section">
+          <h4>错误信息</h4>
+          <pre class="code-block error-block">{{ call.error_message }}</pre>
+        </div>
+
+        <div v-if="call.request_body" class="section">
+          <h4>请求体</h4>
+          <pre class="code-block">{{ fmtJson(call.request_body) }}</pre>
+        </div>
+
+        <div v-if="call.response_body" class="section">
+          <h4>响应体</h4>
+          <pre class="code-block">{{ fmtJson(call.response_body) }}</pre>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<script setup lang="ts">
+import type { CallRecord } from "../api";
+
+defineProps<{ call: CallRecord | null }>();
+defineEmits<{ close: [] }>();
+
+function fmt(ts: string) {
+  return ts ? new Date(ts).toLocaleString("zh-CN") : "-";
+}
+function fmtJson(raw: any) {
+  try {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+    // 截断 content 中的大文本
+    const truncated = JSON.parse(JSON.stringify(obj));
+    if (truncated.messages) {
+      truncated.messages = truncated.messages.map((m: any) => {
+        if (typeof m.content === "string" && m.content.length > 500) {
+          return { ...m, content: m.content.slice(0, 500) + "...[截断]" };
+        }
+        return m;
+      });
+    }
+    return JSON.stringify(truncated, null, 2);
+  } catch {
+    return String(raw);
+  }
+}
+</script>
+
+<style scoped>
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: #1e1e2e; border: 1px solid #313244;
+  border-radius: 8px; padding: 20px;
+  max-width: 900px; max-height: 85vh; overflow: auto;
+  width: 95%;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.close-btn { background: none; border: none; color: #cdd6f4; font-size: 24px; cursor: pointer; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+.kv { display: flex; justify-content: space-between; padding: 6px 8px; background: #11111b; border-radius: 4px; }
+.key { color: #6c7086; font-size: 12px; }
+.value { color: #cdd6f4; font-size: 13px; font-family: monospace; }
+.text-green { color: #a6e3a1; }
+.text-red { color: #f38ba8; }
+.section { margin-bottom: 12px; }
+.section h4 { color: #a6adc8; font-size: 13px; margin-bottom: 6px; }
+.code-block {
+  background: #11111b; border-radius: 4px; padding: 12px;
+  font-size: 12px; color: #bac2de; white-space: pre-wrap; word-break: break-all;
+  max-height: 300px; overflow: auto;
+}
+.error-block { color: #f38ba8; }
+@media (max-width: 600px) {
+  .detail-grid { grid-template-columns: 1fr; }
+}
+</style>
