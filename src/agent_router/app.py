@@ -11,6 +11,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig
 from agent_router.db import CallStore
@@ -23,7 +24,7 @@ _SSE_MSG_START_RE = re.compile(rb'event:\s*message_start\s*\ndata:\s*(\{.*\})', 
 _SSE_MSG_DELTA_RE = re.compile(rb'event:\s*message_delta\s*\ndata:\s*(\{.*\})', re.DOTALL)
 
 
-def create_app(config: AppConfig, store: CallStore) -> FastAPI:
+def create_app(config: AppConfig, store: CallStore, config_path: str = "config.toml") -> FastAPI:
     http_client = httpx.AsyncClient(
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         timeout=httpx.Timeout(300.0, connect=10.0),
@@ -50,6 +51,10 @@ def create_app(config: AppConfig, store: CallStore) -> FastAPI:
     # 注册 metrics API
     metrics_router = create_metrics_router(store)
     app.include_router(metrics_router)
+
+    # 注册 config API
+    config_router = create_config_router(config_path)
+    app.include_router(config_router)
 
     @app.get("/health")
     async def health():

@@ -16,6 +16,10 @@ def create_metrics_router(store: CallStore) -> APIRouter:
     async def by_model():
         return await store.by_model()
 
+    @router.get("/api/metrics/by-real-model")
+    async def by_real_model():
+        return await store.by_real_model()
+
     @router.get("/api/metrics/by-provider")
     async def by_provider():
         return await store.by_provider()

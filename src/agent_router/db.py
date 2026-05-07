@@ -183,6 +183,20 @@ class CallStore:
         )
         return [dict(r) for r in rows]
 
+    async def by_real_model(self) -> list[dict]:
+        rows = await self._conn.execute_fetchall(
+            """SELECT
+                COALESCE(provider_model, 'unknown') AS model,
+                COUNT(*) AS count,
+                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+                SUM(input_tokens) AS total_input_tokens,
+                SUM(output_tokens) AS total_output_tokens,
+                SUM(cost_usd) AS total_cost_usd
+            FROM calls WHERE provider_model IS NOT NULL
+            GROUP BY provider_model"""
+        )
+        return [dict(r) for r in rows]
+
     async def daily_trend(self, days: int = 30) -> list[dict]:
         rows = await self._conn.execute_fetchall(
             """SELECT
