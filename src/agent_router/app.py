@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
@@ -189,6 +192,9 @@ def create_app(config: AppConfig, store: CallStore, config_path: str = "config.t
                 status_code=502,
             )
 
+    # 托管 dashboard 静态文件 (放在最后，避免覆盖 API 路由)
+    _mount_dashboard(app)
+
     return app
 
 
@@ -244,6 +250,25 @@ async def _stream_wrapper(stream, *, outcome, store, virtual_model, request_body
             latency_ms=latency_ms,
             request_body=request_body,
         )
-        raise
+def _mount_dashboard(app: FastAPI) -> None:
+    """挂载 dashboard 静态文件，支持 SPA 路由."""
+    dist = Path(__file__).parent.parent.parent / "dashboard" / "dist"
+    if not dist.is_dir():
+        return
 
+    # 先挂载静态资源
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="dashboard_assets")
 
+    # SPA fallback: 非 API 的 GET 请求返回 index.html
+    index_path = dist / "index.html"
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/") or full_path in ("v1/messages", "v1/models", "health"):
+            from fastapi.responses import Response
+            return Response(status_code=404)
+        if index_path.is_file():
+            return FileResponse(str(index_path))
+        return Response(status_code=404)

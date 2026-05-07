@@ -115,9 +115,29 @@ def create_config_router(config_path: str) -> APIRouter:
 
     @router.put("/api/config")
     async def update_config(body: dict):
-        """全量更新配置并写回 config.toml."""
+        """全量更新配置并写回 config.toml.
+
+        api_key 为空或脱敏值时保留原有值，防止误覆盖.
+        """
         try:
+            # 读取现有配置以保留敏感字段
+            existing = _read_config_raw(config_path)
+            existing_providers = existing.get("providers", {})
+            for pname, pdata in body.get("providers", {}).items():
+                api_key = pdata.get("api_key", "")
+                # 空值、占位符、脱敏值 → 保留原来
+                if (
+                    not api_key
+                    or api_key == "${PLACEHOLDER}"
+                    or re.match(r"^\*+$", api_key)
+                    or (len(api_key) > 4 and api_key[4:-4].count("*") >= 4)
+                ):
+                    if pname in existing_providers:
+                        pdata["api_key"] = existing_providers[pname].get("api_key", api_key)
+
             _write_toml(config_path, body)
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(500, f"写入配置失败: {e}")
         return {"status": "ok", "message": "配置已更新，请重启 router 生效"}

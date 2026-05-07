@@ -165,6 +165,13 @@ function addProvider() {
   providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120 });
 }
 function removeProvider(idx: number) {
+  const name = providerEntries.value[idx]?.name;
+  if (name) {
+    // 清理所有引用该 provider 的模型
+    for (const m of modelEntries.value) {
+      m.refs = m.refs.filter((r) => r.provider !== name);
+    }
+  }
   providerEntries.value.splice(idx, 1);
 }
 
