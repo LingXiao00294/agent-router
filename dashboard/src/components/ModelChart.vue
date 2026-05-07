@@ -89,8 +89,18 @@ async function load() {
   }
 }
 
-onMounted(load);
+function onResize() {
+  modelChart?.resize();
+  tokenChart?.resize();
+}
+
+onMounted(() => {
+  load();
+  window.addEventListener("resize", onResize);
+});
+
 onUnmounted(() => {
+  window.removeEventListener("resize", onResize);
   modelChart?.dispose();
   tokenChart?.dispose();
 });

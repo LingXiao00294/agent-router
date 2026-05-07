@@ -54,22 +54,20 @@ defineProps<{ call: CallRecord | null }>();
 defineEmits<{ close: [] }>();
 
 function fmt(ts: string) {
-  return ts ? new Date(ts).toLocaleString("zh-CN") : "-";
+  return ts ? new Date(ts).toLocaleString() : "-";
 }
 function fmtJson(raw: any) {
   try {
-    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-    // 截断 content 中的大文本
-    const truncated = JSON.parse(JSON.stringify(obj));
-    if (truncated.messages) {
-      truncated.messages = truncated.messages.map((m: any) => {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : JSON.parse(JSON.stringify(raw));
+    if (obj.messages) {
+      obj.messages = obj.messages.map((m: any) => {
         if (typeof m.content === "string" && m.content.length > 500) {
           return { ...m, content: m.content.slice(0, 500) + "...[截断]" };
         }
         return m;
       });
     }
-    return JSON.stringify(truncated, null, 2);
+    return JSON.stringify(obj, null, 2);
   } catch {
     return String(raw);
   }

@@ -61,9 +61,12 @@ export async function fetchSummary(): Promise<Summary> {
 
 export async function fetchCalls(
   page = 1,
-  size = 50
+  size = 50,
+  model = ""
 ): Promise<CallsPage> {
-  const res = await fetch(`${BASE}/calls?page=${page}&size=${size}`);
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (model) params.set("model", model);
+  const res = await fetch(`${BASE}/calls?${params}`);
   return res.json();
 }
 

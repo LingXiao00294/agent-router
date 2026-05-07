@@ -70,8 +70,19 @@ async function load() {
   });
 }
 
-onMounted(load);
-onUnmounted(() => chart?.dispose());
+function onResize() {
+  chart?.resize();
+}
+
+onMounted(() => {
+  load();
+  window.addEventListener("resize", onResize);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", onResize);
+  chart?.dispose();
+});
 </script>
 
 <style scoped>

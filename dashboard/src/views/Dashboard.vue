@@ -42,7 +42,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { CallRecord, Summary } from "../api";
-import { fetchSummary, fetchCallDetail } from "../api";
+import { fetchSummary, fetchCalls, fetchCallDetail } from "../api";
 import StatsCards from "../components/StatsCards.vue";
 import TrendChart from "../components/TrendChart.vue";
 import ModelChart from "../components/ModelChart.vue";
@@ -71,10 +71,7 @@ async function loadAll() {
 }
 
 async function loadCalls() {
-  const params = new URLSearchParams({ page: String(page.value), size: String(size.value) });
-  if (filterModel.value) params.set("model", filterModel.value);
-  const res = await fetch(`/api/calls?${params}`);
-  const data = await res.json();
+  const data = await fetchCalls(page.value, size.value, filterModel.value);
   calls.value = data.data;
   total.value = data.total;
 }
