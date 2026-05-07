@@ -11,7 +11,7 @@ from agent_router.app import create_app
 @pytest.fixture
 def app_config():
     return AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=8080),
+        server=ServerConfig(host="127.0.0.1", port=9456),
         models={
             "test-router": [
                 ProviderConfig(

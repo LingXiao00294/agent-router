@@ -18,7 +18,7 @@ uv run ruff check src tests            # Lint
 uv run ty src tests                    # 类型检查
 
 # 前端 Dashboard
-cd dashboard && npm run dev            # 开发模式 (Vite 代理后端到 127.0.0.1:8080)
+cd dashboard && npm run dev            # 开发模式 (Vite 代理后端到 127.0.0.1:9456)
 cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 ```
 
