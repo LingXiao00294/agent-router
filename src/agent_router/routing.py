@@ -78,6 +78,7 @@ class Router:
 
                 if outcome is not None:
                     outcome["provider_type"] = provider_cfg.type
+                    outcome["provider_name"] = provider_cfg.name
                     outcome["provider_model"] = provider_cfg.model
                     outcome["provider_url"] = provider_cfg.base_url
                     outcome["attempt"] = attempt
@@ -191,6 +192,7 @@ class Router:
 
                 if outcome is not None:
                     outcome["provider_type"] = provider_cfg.type
+                    outcome["provider_name"] = provider_cfg.name
                     outcome["provider_model"] = provider_cfg.model
                     outcome["provider_url"] = provider_cfg.base_url
                     outcome["attempt"] = attempt

@@ -17,6 +17,7 @@ export interface CallRecord {
   id: string;
   timestamp: string;
   virtual_model: string;
+  provider_name: string | null;
   provider_type: string | null;
   provider_model: string | null;
   provider_url: string | null;

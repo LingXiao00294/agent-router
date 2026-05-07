@@ -5,11 +5,13 @@
       <thead>
         <tr>
           <th>时间</th>
-          <th>模型</th>
+          <th>虚拟模型</th>
           <th>Provider</th>
+          <th>模型</th>
           <th>状态</th>
           <th>延迟</th>
           <th>输入 Token</th>
+          <th>Cache</th>
           <th>输出 Token</th>
           <th>费用</th>
         </tr>
@@ -18,7 +20,8 @@
         <tr v-for="call in calls" :key="call.id" @click="$emit('select', call.id)" class="clickable">
           <td>{{ formatTime(call.timestamp) }}</td>
           <td>{{ call.virtual_model }}</td>
-          <td>{{ call.provider_type || "-" }}</td>
+          <td>{{ call.provider_name || call.provider_type || "-" }}</td>
+          <td>{{ call.provider_model || "-" }}</td>
           <td>
             <span :class="call.status === 'success' ? 'badge-success' : 'badge-error'">
               {{ call.status === "success" ? "✓" : "✗" }}
@@ -26,6 +29,7 @@
           </td>
           <td>{{ call.latency_ms }}ms</td>
           <td>{{ formatTokens(call.input_tokens) }}</td>
+          <td>{{ formatTokens(call.cache_read_tokens) }}</td>
           <td>{{ formatTokens(call.output_tokens) }}</td>
           <td>${{ (call.cost_usd || 0).toFixed(6) }}</td>
         </tr>

@@ -37,6 +37,7 @@ class ProviderConfig(BaseModel):
     """
 
     type: Literal["anthropic", "openai"]
+    name: str = ""
     model: str
     api_key: str
     base_url: str
@@ -135,6 +136,7 @@ def load_config(config_path: str | Path) -> AppConfig:
                 resolved.append(
                     ProviderConfig(
                         type=pdef.type,
+                        name=provider_name,
                         model=ref["model"],
                         api_key=pdef.api_key,
                         base_url=pdef.base_url,

@@ -23,8 +23,8 @@ from agent_router.routing import AllProvidersFailedError, Router, UnknownModelEr
 logger = structlog.get_logger(__name__)
 
 # 从 SSE 流中提取 usage 的正则 (message_start 有 input_tokens, message_delta 有 output_tokens)
-_SSE_MSG_START_RE = re.compile(rb'event:\s*message_start\s*\ndata:\s*(\{.*\})', re.DOTALL)
-_SSE_MSG_DELTA_RE = re.compile(rb'event:\s*message_delta\s*\ndata:\s*(\{.*\})', re.DOTALL)
+_SSE_MSG_START_RE = re.compile(rb'event:\s*message_start\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)', re.DOTALL)
+_SSE_MSG_DELTA_RE = re.compile(rb'event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)', re.DOTALL)
 
 
 def create_app(config: AppConfig, store: CallStore, config_path: str = "config.toml") -> FastAPI:
@@ -112,6 +112,7 @@ def create_app(config: AppConfig, store: CallStore, config_path: str = "config.t
                 await store.record(
                     virtual_model=virtual_model,
                     status="success",
+                    provider_name=outcome.get("provider_name"),
                     provider_type=outcome.get("provider_type"),
                     provider_model=outcome.get("provider_model"),
                     provider_url=outcome.get("provider_url"),
@@ -207,6 +208,9 @@ async def _stream_wrapper(stream, *, outcome, store, virtual_model, request_body
         async for chunk in stream:
             yield chunk
             buffer += chunk
+            # 限制 buffer 大小，只保留最近 32KB
+            if len(buffer) > 32768:
+                buffer = buffer[-16384:]
             # 从 message_start 提取 input_tokens / cache
             m = _SSE_MSG_START_RE.search(buffer)
             if m:
@@ -229,6 +233,7 @@ async def _stream_wrapper(stream, *, outcome, store, virtual_model, request_body
         await store.record(
             virtual_model=virtual_model,
             status="success",
+            provider_name=outcome.get("provider_name"),
             provider_type=outcome.get("provider_type"),
             provider_model=outcome.get("provider_model"),
             provider_url=outcome.get("provider_url"),

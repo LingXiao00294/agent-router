@@ -11,8 +11,8 @@
           <div class="kv"><span class="key">ID</span><span class="value">{{ call.id }}</span></div>
           <div class="kv"><span class="key">时间</span><span class="value">{{ fmt(call.timestamp) }}</span></div>
           <div class="kv"><span class="key">虚拟模型</span><span class="value">{{ call.virtual_model }}</span></div>
-          <div class="kv"><span class="key">Provider</span><span class="value">{{ call.provider_type || "-" }}</span></div>
-          <div class="kv"><span class="key">真实模型</span><span class="value">{{ call.provider_model || "-" }}</span></div>
+          <div class="kv"><span class="key">Provider</span><span class="value">{{ call.provider_name || call.provider_type || "-" }}</span></div>
+          <div class="kv"><span class="key">模型</span><span class="value">{{ call.provider_model || "-" }}</span></div>
           <div class="kv"><span class="key">尝试次数</span><span class="value">{{ call.attempt }}</span></div>
           <div class="kv">
             <span class="key">状态</span>
