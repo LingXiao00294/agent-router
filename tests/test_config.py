@@ -48,7 +48,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -84,7 +84,7 @@ priority = 2
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -112,7 +112,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -130,7 +130,7 @@ base_url = "https://api.com"
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [[models.test]]
 provider = "p1"
@@ -148,7 +148,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -171,7 +171,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -209,7 +209,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"
@@ -233,7 +233,7 @@ priority = 1
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.anthropic]
 type = "anthropic"
@@ -271,7 +271,7 @@ priority = 2
         toml = """
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 9456
 
 [providers.p1]
 type = "anthropic"

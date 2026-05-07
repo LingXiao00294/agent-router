@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-const routerPort = process.env.ROUTER_PORT || "8080";
+const routerPort = process.env.ROUTER_PORT || "9456";
 
 export default defineConfig({
   plugins: [vue()],

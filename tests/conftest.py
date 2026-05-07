@@ -9,7 +9,7 @@ from agent_router.config import AppConfig, ServerConfig, ProviderConfig
 @pytest.fixture
 def sample_config() -> AppConfig:
     return AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=8080),
+        server=ServerConfig(host="127.0.0.1", port=9456),
         models={
             "haiku-router": [
                 ProviderConfig(
