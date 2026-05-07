@@ -210,11 +210,9 @@ async def _stream_wrapper(
     """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
     buffer = b""
     usage: dict = {}
-    yielded_any = False
 
     try:
         async for chunk in stream:
-            yielded_any = True
             yield chunk
             buffer += chunk
             # 限制 buffer 大小，只保留最近 32KB
@@ -264,22 +262,23 @@ async def _stream_wrapper(
             latency_ms=latency_ms,
             request_body=request_body,
         )
-        if not yielded_any:
-            error_body = json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": str(e),
-                    },
-                }
-            )
-            yield f"event: error\ndata: {error_body}\n\n".encode()
+        error_body = json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": str(e),
+                },
+            }
+        )
+        yield f"event: error\ndata: {error_body}\n\n".encode()
 
 
 def _mount_dashboard(app: FastAPI) -> None:
     """挂载 dashboard 静态文件，支持 SPA 路由."""
     dist = Path(__file__).parent.parent.parent / "dashboard" / "dist"
+    if not dist.is_dir():
+        dist = Path("dashboard") / "dist"  # CWD fallback for wheel installs
     if not dist.is_dir():
         return
 

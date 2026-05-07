@@ -98,8 +98,18 @@ def _write_toml(config_path: str, data: dict) -> None:
 
     content = "\n".join(lines) + "\n"
     tmp_path = Path(config_path).with_suffix(".tmp")
-    with open(tmp_path, "w") as f:
-        f.write(content)
+    try:
+        with open(tmp_path, "w") as f:
+            f.write(content)
+        # 验证写入的 TOML 可解析
+        with open(tmp_path, "rb") as f:
+            tomllib.load(f)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     tmp_path.replace(config_path)
 
 

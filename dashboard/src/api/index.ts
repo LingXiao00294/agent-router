@@ -89,3 +89,26 @@ export async function fetchDailyTrend(days = 30) {
   const res = await fetch(`${BASE}/metrics/daily?days=${days}`);
   return res.json();
 }
+
+export async function fetchConfig(): Promise<any> {
+  const res = await fetch(`${BASE}/config`);
+  return res.json();
+}
+
+export async function fetchConfigModels(): Promise<any> {
+  const res = await fetch(`${BASE}/config/models`);
+  return res.json();
+}
+
+export async function updateConfig(body: any): Promise<any> {
+  const res = await fetch(`${BASE}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.detail || "保存失败");
+  }
+  return res.json();
+}

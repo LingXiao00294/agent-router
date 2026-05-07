@@ -94,6 +94,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { fetchConfig, fetchConfigModels, updateConfig } from "../api";
 
 const loading = ref(true);
 const saving = ref(false);
@@ -129,8 +130,8 @@ const providerNames = computed(() => providerEntries.value.map((p) => p.name).fi
 async function loadConfig() {
   loading.value = true;
   const [providers, models] = await Promise.all([
-    fetch("/api/config").then((r) => r.json()),
-    fetch("/api/config/models").then((r) => r.json()),
+    fetchConfig(),
+    fetchConfigModels(),
   ]);
 
   if (providers.server) {
@@ -250,19 +251,9 @@ async function saveConfig() {
   }
 
   try {
-    const res = await fetch("/api/config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      message.value = data.message;
-      messageType.value = "success";
-    } else {
-      message.value = data.detail || "保存失败";
-      messageType.value = "error";
-    }
+    const res = await updateConfig(body);
+    message.value = res.message;
+    messageType.value = "success";
   } catch (e: any) {
     message.value = e.message;
     messageType.value = "error";

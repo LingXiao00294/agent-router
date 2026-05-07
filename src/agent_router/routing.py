@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
 
 import structlog
 
@@ -27,7 +26,9 @@ class Router:
         self.config = config
         self.http = http_client
 
-    async def route_non_stream(self, request_body: dict, outcome: dict | None = None) -> dict:
+    async def route_non_stream(
+        self, request_body: dict, outcome: dict | None = None
+    ) -> dict:
         """非流式路由: 返回第一个成功 provider 的响应 JSON.
 
         outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
@@ -87,13 +88,15 @@ class Router:
 
             except RetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
-                errors.append({
-                    "provider": provider_cfg.type,
-                    "model": provider_cfg.model,
-                    "priority": provider_cfg.priority,
-                    "error": str(e),
-                    "retryable": True,
-                })
+                errors.append(
+                    {
+                        "provider": provider_cfg.type,
+                        "model": provider_cfg.model,
+                        "priority": provider_cfg.priority,
+                        "error": str(e),
+                        "retryable": True,
+                    }
+                )
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,
@@ -106,13 +109,15 @@ class Router:
 
             except NonRetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
-                errors.append({
-                    "provider": provider_cfg.type,
-                    "model": provider_cfg.model,
-                    "priority": provider_cfg.priority,
-                    "error": str(e),
-                    "retryable": False,
-                })
+                errors.append(
+                    {
+                        "provider": provider_cfg.type,
+                        "model": provider_cfg.model,
+                        "priority": provider_cfg.priority,
+                        "error": str(e),
+                        "retryable": False,
+                    }
+                )
                 logger.error(
                     "provider.fail",
                     request_id=request_id,
@@ -201,13 +206,15 @@ class Router:
 
             except RetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
-                errors.append({
-                    "provider": provider_cfg.type,
-                    "model": provider_cfg.model,
-                    "priority": provider_cfg.priority,
-                    "error": str(e),
-                    "retryable": True,
-                })
+                errors.append(
+                    {
+                        "provider": provider_cfg.type,
+                        "model": provider_cfg.model,
+                        "priority": provider_cfg.priority,
+                        "error": str(e),
+                        "retryable": True,
+                    }
+                )
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,
@@ -220,13 +227,15 @@ class Router:
 
             except NonRetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
-                errors.append({
-                    "provider": provider_cfg.type,
-                    "model": provider_cfg.model,
-                    "priority": provider_cfg.priority,
-                    "error": str(e),
-                    "retryable": False,
-                })
+                errors.append(
+                    {
+                        "provider": provider_cfg.type,
+                        "model": provider_cfg.model,
+                        "priority": provider_cfg.priority,
+                        "error": str(e),
+                        "retryable": False,
+                    }
+                )
                 logger.error(
                     "provider.fail",
                     request_id=request_id,
@@ -237,7 +246,13 @@ class Router:
                     provider_latency_ms=round(p_latency),
                 )
                 total_latency = (time.time() - start_time) * 1000
-                raise  # 流式下不重试也是 fatal
+                if outcome is not None:
+                    outcome["provider_name"] = provider_cfg.name
+                    outcome["provider_type"] = provider_cfg.type
+                    outcome["provider_model"] = provider_cfg.model
+                    outcome["provider_url"] = provider_cfg.base_url
+                    outcome["attempt"] = attempt
+                raise
 
         # 全部失败
         total_latency = (time.time() - start_time) * 1000
