@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import traceback
@@ -23,11 +22,17 @@ from agent_router.routing import AllProvidersFailedError, Router, UnknownModelEr
 logger = structlog.get_logger(__name__)
 
 # 从 SSE 流中提取 usage 的正则 (message_start 有 input_tokens, message_delta 有 output_tokens)
-_SSE_MSG_START_RE = re.compile(rb'event:\s*message_start\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)', re.DOTALL)
-_SSE_MSG_DELTA_RE = re.compile(rb'event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)', re.DOTALL)
+_SSE_MSG_START_RE = re.compile(
+    rb"event:\s*message_start\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
+)
+_SSE_MSG_DELTA_RE = re.compile(
+    rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
+)
 
 
-def create_app(config: AppConfig, store: CallStore, config_path: str = "config.toml") -> FastAPI:
+def create_app(
+    config: AppConfig, store: CallStore, config_path: str = "config.toml"
+) -> FastAPI:
     http_client = httpx.AsyncClient(
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         timeout=httpx.Timeout(300.0, connect=10.0),
@@ -199,13 +204,17 @@ def create_app(config: AppConfig, store: CallStore, config_path: str = "config.t
     return app
 
 
-async def _stream_wrapper(stream, *, outcome, store, virtual_model, request_body, start_time):
+async def _stream_wrapper(
+    stream, *, outcome, store, virtual_model, request_body, start_time
+):
     """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
     buffer = b""
     usage: dict = {}
+    yielded_any = False
 
     try:
         async for chunk in stream:
+            yielded_any = True
             yield chunk
             buffer += chunk
             # 限制 buffer 大小，只保留最近 32KB
@@ -255,6 +264,19 @@ async def _stream_wrapper(stream, *, outcome, store, virtual_model, request_body
             latency_ms=latency_ms,
             request_body=request_body,
         )
+        if not yielded_any:
+            error_body = json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": str(e),
+                    },
+                }
+            )
+            yield f"event: error\ndata: {error_body}\n\n".encode()
+
+
 def _mount_dashboard(app: FastAPI) -> None:
     """挂载 dashboard 静态文件，支持 SPA 路由."""
     dist = Path(__file__).parent.parent.parent / "dashboard" / "dist"
@@ -264,15 +286,18 @@ def _mount_dashboard(app: FastAPI) -> None:
     # 先挂载静态资源
     assets = dist / "assets"
     if assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="dashboard_assets")
+        app.mount(
+            "/assets", StaticFiles(directory=str(assets)), name="dashboard_assets"
+        )
 
     # SPA fallback: 非 API 的 GET 请求返回 index.html
     index_path = dist / "index.html"
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        if full_path.startswith("api/") or full_path in ("v1/messages", "v1/models", "health"):
-            from fastapi.responses import Response
+        from fastapi.responses import Response
+
+        if full_path.startswith(("api/", "v1/")) or full_path == "health":
             return Response(status_code=404)
         if index_path.is_file():
             return FileResponse(str(index_path))
