@@ -121,8 +121,8 @@ base_url = "https://api.com"
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(SystemExit):
-                load_config(path)
+            config = load_config(path)
+            assert config.models == {}
         finally:
             path.unlink()
 
@@ -139,8 +139,23 @@ priority = 1
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(SystemExit):
-                load_config(path)
+            config = load_config(path)
+            assert config.models == {}
+        finally:
+            path.unlink()
+
+    def test_server_only_config(self):
+        toml = """
+[server]
+host = "127.0.0.1"
+port = 9456
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            assert config.server.host == "127.0.0.1"
+            assert config.server.port == 9456
+            assert config.models == {}
         finally:
             path.unlink()
 

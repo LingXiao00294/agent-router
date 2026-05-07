@@ -1,3 +1,5 @@
+# 最小启动配置 — 可直接启动后再通过 dashboard 配置 provider 和模型
+
 [server]
 host = "127.0.0.1"
 port = 9456

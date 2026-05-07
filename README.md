@@ -18,7 +18,7 @@ uv sync
 cp .env.example .env   # 编辑 .env，填入各 provider 的 API key
 
 # 3. 创建路由配置
-cp config.toml.example config.toml   # 编辑 config.toml，定义 provider 和虚拟模型映射
+cp config.toml.example config.toml   # 可直接启动，之后通过 dashboard 添加 provider
 
 # 4. 启动
 uv run agent-router
