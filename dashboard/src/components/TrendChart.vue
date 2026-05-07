@@ -14,7 +14,12 @@ const chartRef = ref<HTMLDivElement>();
 let chart: echarts.ECharts | null = null;
 
 async function load() {
-  const data = await fetchDailyTrend(30);
+  let data;
+  try {
+    data = await fetchDailyTrend(30);
+  } catch {
+    return;
+  }
   if (!chartRef.value) return;
   if (!chart) {
     chart = echarts.init(chartRef.value, undefined, { renderer: "canvas" });

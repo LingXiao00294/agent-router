@@ -27,6 +27,7 @@ package = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_router"]
+artifacts = ["dashboard/dist/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

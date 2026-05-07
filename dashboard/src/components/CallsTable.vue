@@ -61,7 +61,7 @@ defineEmits<{
 
 function formatTime(ts: string): string {
   if (!ts) return "-";
-  return new Date(ts).toLocaleString("zh-CN");
+  return new Date(ts).toLocaleString();
 }
 
 function formatTokens(n: number | null): string {

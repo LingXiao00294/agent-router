@@ -72,18 +72,16 @@ def _write_toml(config_path: str, data: dict) -> None:
     # [server]
     server = data.get("server", {})
     lines.append("[server]")
-    for k in ["host", "port", "log_level"]:
-        if k in server:
-            lines.append(f"{k} = {_toml_value(server[k])}")
+    for k, v in server.items():
+        lines.append(f"{k} = {_toml_value(v)}")
     lines.append("")
 
     # [providers.*]
     providers = data.get("providers", {})
     for name, pdata in providers.items():
         lines.append(f"[providers.{_toml_key(name)}]")
-        for k in ["type", "api_key", "base_url", "timeout_seconds"]:
-            if k in pdata:
-                lines.append(f"{k} = {_toml_value(pdata[k])}")
+        for k, v in pdata.items():
+            lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
 
     # [[models.*]]
@@ -91,9 +89,8 @@ def _write_toml(config_path: str, data: dict) -> None:
     for vname, refs in models.items():
         for ref in refs:
             lines.append(f"[[models.{_toml_key(vname)}]]")
-            for k in ["provider", "model", "priority"]:
-                if k in ref:
-                    lines.append(f"{k} = {_toml_value(ref[k])}")
+            for k, v in ref.items():
+                lines.append(f"{k} = {_toml_value(v)}")
             lines.append("")
 
     content = "\n".join(lines) + "\n"

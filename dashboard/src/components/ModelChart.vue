@@ -22,14 +22,21 @@ let modelChart: echarts.ECharts | null = null;
 let tokenChart: echarts.ECharts | null = null;
 
 async function load() {
-  const data = await fetchByRealModel();
+  let data;
+  try {
+    data = await fetchByRealModel();
+  } catch {
+    return;
+  }
   if (!data.length) return;
 
   const colors = ["#89b4fa", "#a6e3a1", "#fab387", "#f38ba8", "#cba6f7"];
 
   // 模型分布饼图
   if (modelRef.value) {
-    modelChart = echarts.init(modelRef.value, undefined, { renderer: "canvas" });
+    if (!modelChart) {
+      modelChart = echarts.init(modelRef.value, undefined, { renderer: "canvas" });
+    }
     modelChart.setOption({
       tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
       series: [
@@ -50,7 +57,9 @@ async function load() {
 
   // Token 用量柱状图
   if (tokenRef.value) {
-    tokenChart = echarts.init(tokenRef.value, undefined, { renderer: "canvas" });
+    if (!tokenChart) {
+      tokenChart = echarts.init(tokenRef.value, undefined, { renderer: "canvas" });
+    }
     tokenChart.setOption({
       tooltip: { trigger: "axis" },
       grid: { left: 55, right: 20, top: 10, bottom: 30 },
