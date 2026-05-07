@@ -17,8 +17,8 @@ uv sync
 # 2. 配置环境变量
 cp .env.example .env   # 编辑 .env，填入各 provider 的 API key
 
-# 3. 编辑路由配置
-vim config.toml        # 定义 provider 和虚拟模型映射
+# 3. 创建路由配置
+cp config.toml.example config.toml   # 编辑 config.toml，定义 provider 和虚拟模型映射
 
 # 4. 启动
 uv run agent-router
@@ -28,6 +28,24 @@ curl http://127.0.0.1:9456/health
 ```
 
 启动后可访问 `http://127.0.0.1:9456` 打开监控面板。
+
+### 配合 Claude Code 使用
+
+修改 `~/.claude/settings.json`，添加以下配置将 Claude Code 的 API 请求指向本地路由代理：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9456",
+    "ANTHROPIC_AUTH_TOKEN": "dummy",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-router",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-router",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-router"
+  }
+}
+```
+
+> **注意**：`ANTHROPIC_AUTH_TOKEN` 可以设为任意非空值（如 `dummy`），router 不会校验 token。三个 `DEFAULT_*_MODEL` 需与 `config.toml` 中定义的虚拟模型名一致。
 
 ## 配置
 
@@ -39,7 +57,7 @@ host = "127.0.0.1"
 port = 9456
 log_level = "debug"
 
-# Provider 定义 — 每个 provider 只配一次
+# Provider 定义 — 每个 provider 只配置一次
 [providers.zai]
 type = "anthropic"
 api_key = "${ZAI_API_KEY}"
@@ -63,22 +81,6 @@ priority = 2
 ```
 
 `${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
-
-### Claude Code 配合使用
-
-修改 `~/.claude/settings.json`：
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9456",
-    "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-router",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-router",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-router"
-  }
-}
-```
 
 ## API 端点
 

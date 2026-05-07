@@ -1,0 +1,37 @@
+[server]
+host = "127.0.0.1"
+port = 9456
+log_level = "debug"
+
+# ============================================================
+# Provider 定义 — 每个 provider 只需配置一次
+#   取消注释并填入你的 provider 信息
+# ============================================================
+# [providers.<your-provider>]
+# type = "anthropic"
+# api_key = "${YOUR_API_KEY_ENV}"
+# base_url = "https://your-api-endpoint"
+
+# [providers.<your-provider2>]
+# type = "anthropic"
+# api_key = "${YOUR_API_KEY_ENV}"
+# base_url = "https://your-api-endpoint"
+
+# ============================================================
+# 虚拟模型 — 引用 provider + 真实模型名 + 优先级
+#   优先级越小越优先，同一模型可配置多个 provider 做故障转移
+# ============================================================
+# [[models.opus-router]]
+# provider = "<your-provider>"
+# model = "<real-model-name>"
+# priority = 1
+
+# [[models.sonnet-router]]
+# provider = "<your-provider>"
+# model = "<real-model-name>"
+# priority = 1
+
+# [[models.haiku-router]]
+# provider = "<your-provider>"
+# model = "<real-model-name>"
+# priority = 1
