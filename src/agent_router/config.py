@@ -56,8 +56,14 @@ class ServerConfig(BaseModel):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
 
 
+class RouterConfig(BaseModel):
+    failure_threshold: int = 5
+    recovery_timeout: float = 600.0
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    router: RouterConfig = Field(default_factory=RouterConfig)
     models: dict[str, list[ProviderConfig]]
 
 
@@ -88,6 +94,7 @@ def load_config(config_path: str | Path) -> AppConfig:
     raw = _expand_env_vars(raw)
 
     server_raw = raw.get("server", {})
+    router_raw = raw.get("router", {})
     providers_raw: dict[str, dict] = raw.get("providers", {})
     models_raw: dict[str, list[dict]] = raw.get("models", {})
 
@@ -160,5 +167,6 @@ def load_config(config_path: str | Path) -> AppConfig:
 
     return AppConfig(
         server=ServerConfig(**server_raw),
+        router=RouterConfig(**router_raw),
         models=models,
     )

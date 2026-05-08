@@ -32,7 +32,7 @@ class CircuitBreaker:
     def __init__(
         self,
         failure_threshold: int = 5,
-        recovery_timeout: float = 60.0,
+        recovery_timeout: float = 600.0,
     ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout

@@ -26,7 +26,10 @@ class Router:
     def __init__(self, config: AppConfig, http_client) -> None:
         self.config = config
         self.http = http_client
-        self.circuit_breaker = CircuitBreaker()
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=config.router.failure_threshold,
+            recovery_timeout=config.router.recovery_timeout,
+        )
 
     async def route_non_stream(
         self, request_body: dict, outcome: dict | None = None
