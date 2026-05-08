@@ -27,6 +27,15 @@
         </div>
       </section>
 
+      <!-- Router -->
+      <section class="section">
+        <h3>Router</h3>
+        <div class="server-card">
+          <label>熔断阈值 <input v-model.number="routerConfig.failure_threshold" type="number" class="input short" /> 次连续失败</label>
+          <label>恢复超时 <input v-model.number="routerConfig.recovery_timeout" type="number" class="input short" /> 秒</label>
+        </div>
+      </section>
+
       <!-- Providers -->
       <section class="section">
         <div class="section-header">
@@ -103,6 +112,8 @@ const messageType = ref("success");
 
 const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug" });
 
+const routerConfig = ref({ failure_threshold: 5, recovery_timeout: 600 });
+
 interface ProviderEntry {
   name: string;
   type: string;
@@ -139,6 +150,13 @@ async function loadConfig() {
       host: providers.server.host || "127.0.0.1",
       port: providers.server.port || 9456,
       log_level: providers.server.log_level || "debug",
+    };
+  }
+
+  if (providers.router) {
+    routerConfig.value = {
+      failure_threshold: providers.router.failure_threshold ?? 5,
+      recovery_timeout: providers.router.recovery_timeout ?? 600,
     };
   }
 
@@ -225,6 +243,7 @@ async function saveConfig() {
 
   const body: any = {
     server: { ...serverConfig.value },
+    router: { ...routerConfig.value },
     providers: {},
     models: {},
   };

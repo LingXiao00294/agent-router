@@ -76,6 +76,14 @@ def _write_toml(config_path: str, data: dict) -> None:
         lines.append(f"{k} = {_toml_value(v)}")
     lines.append("")
 
+    # [router]
+    router = data.get("router")
+    if router:
+        lines.append("[router]")
+        for k, v in router.items():
+            lines.append(f"{k} = {_toml_value(v)}")
+        lines.append("")
+
     # [providers.*]
     providers = data.get("providers", {})
     for name, pdata in providers.items():
