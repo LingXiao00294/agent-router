@@ -60,7 +60,7 @@ class Router:
             logger.info(
                 "provider.try",
                 request_id=request_id,
-                provider=provider_cfg.type,
+                provider=provider_cfg.name,
                 model=provider_cfg.model,
                 priority=provider_cfg.priority,
                 attempt=attempt,
@@ -77,7 +77,7 @@ class Router:
                 logger.info(
                     "provider.success",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     attempt=attempt,
                     provider_latency_ms=round(p_latency),
@@ -195,7 +195,7 @@ class Router:
             logger.info(
                 "provider.try",
                 request_id=request_id,
-                provider=provider_cfg.type,
+                provider=provider_cfg.name,
                 model=provider_cfg.model,
                 priority=provider_cfg.priority,
                 attempt=attempt,
@@ -213,7 +213,7 @@ class Router:
                 logger.info(
                     "provider.success",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     attempt=attempt,
                     provider_latency_ms=round(p_latency),
@@ -329,6 +329,20 @@ class Router:
                 model=virtual_model,
                 skipped=skipped,
                 available_count=len(available),
+            )
+
+        if not available and skipped:
+            raise AllProvidersFailedError(
+                virtual_model,
+                [
+                    {
+                        "provider": s["provider"],
+                        "model": s["model"],
+                        "error": f"provider 已熔断 (state={s['state']})",
+                        "retryable": True,
+                    }
+                    for s in skipped
+                ],
             )
 
         return available

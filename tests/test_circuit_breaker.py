@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from agent_router.circuit_breaker import CircuitBreaker, CircuitState
-from agent_router.routing import Router
+from agent_router.routing import AllProvidersFailedError, Router
 
 
 class TestCircuitBreakerUnit:
@@ -100,12 +102,14 @@ class TestCircuitBreakerRouterIntegration:
         assert len(providers) == 1
         assert providers[0].name == "zhipu"
 
-    def test_all_open_returns_empty(self, sample_config, http_client):
+    def test_all_open_raises_error(self, sample_config, http_client):
         router = Router(sample_config, http_client)
         router.circuit_breaker.record_failure("anthropic", immediate=True)
         router.circuit_breaker.record_failure("zhipu", immediate=True)
-        providers = router._get_providers("haiku-router")
-        assert providers == []
+        with pytest.raises(AllProvidersFailedError) as exc:
+            router._get_providers("haiku-router")
+        assert "熔断" in str(exc.value)
+        assert len(exc.value.errors) == 2
 
     def test_recovery_restores_provider(self, sample_config, http_client):
         router = Router(sample_config, http_client)
