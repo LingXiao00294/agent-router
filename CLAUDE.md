@@ -41,8 +41,18 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 - `Router` 接收虚拟模型名，按优先级遍历 provider 列表
 - 成功时返回第一个 provider 的响应，失败时尝试下一个（可重试错误）或立即失败（不可重试错误）
 - 支持流式（`route_stream` → `AsyncIterator[bytes]`）和非流式（`route_non_stream` → `dict`）
-- `RetryableError`: 401、403、429、5xx、连接/超时错误 → 故障转移
+- `RetryableError`: 429、529、5xx、连接/超时错误 → 故障转移
+- `RetryableError(immediate_break=True)`: 401、403 → 故障转移 + 立即熔断该 provider
 - `NonRetryableError`: 4xx（不含 401/403/429）、协议错误 → 立即失败
+- 熔断器过滤已熔断的 provider，不再对其发起新请求
+
+### 熔断器 (`circuit_breaker.py`)
+
+- Per-provider 熔断器，三态：`CLOSED` → `OPEN` → `HALF_OPEN` → `CLOSED`
+- 401/403（认证失败）→ 立即熔断（`immediate_break=True`），不会自动恢复
+- 429/529/5xx 连续失败达阈值（默认 5 次）→ 熔断
+- 熔断后等待恢复超时（默认 60s）→ 进入半开状态，允许一次探测请求
+- 探测成功 → 关闭熔断器；探测失败 → 重新熔断
 
 ### Provider 层 (`providers/`)
 
@@ -83,6 +93,7 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 
 ## 测试
 
-- `conftest.py`: 提供 `sample_config`（虚拟模型 → mock provider）和 `http_client` fixture
+- `conftest.py`: 提供 `sample_config`（虚拟模型 → mock provider，provider 含 `name` 字段）和 `http_client` fixture
 - `pytest.ini_options`: `asyncio_mode = "auto"`，所有测试自动支持 async
 - 使用 `pytest-httpx` 模拟 HTTP 响应
+- `test_circuit_breaker.py`: 熔断器单元测试 + Router 集成测试

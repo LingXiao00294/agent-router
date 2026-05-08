@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import structlog
 
+from agent_router.circuit_breaker import CircuitBreaker
 from agent_router.config import AppConfig, ProviderConfig
 from agent_router.providers.anthropic_compat import AnthropicCompatProvider
 from agent_router.providers.base import BaseProvider, NonRetryableError, RetryableError
@@ -25,6 +26,7 @@ class Router:
     def __init__(self, config: AppConfig, http_client) -> None:
         self.config = config
         self.http = http_client
+        self.circuit_breaker = CircuitBreaker()
 
     async def route_non_stream(
         self, request_body: dict, outcome: dict | None = None
@@ -67,6 +69,8 @@ class Router:
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
 
+                self.circuit_breaker.record_success(provider_cfg.name)
+
                 logger.info(
                     "provider.success",
                     request_id=request_id,
@@ -88,9 +92,12 @@ class Router:
 
             except RetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
+                self.circuit_breaker.record_failure(
+                    provider_cfg.name, immediate=e.immediate_break
+                )
                 errors.append(
                     {
-                        "provider": provider_cfg.type,
+                        "provider": provider_cfg.name,
                         "model": provider_cfg.model,
                         "priority": provider_cfg.priority,
                         "error": str(e),
@@ -100,18 +107,31 @@ class Router:
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     error=str(e),
                     retry=True,
                     provider_latency_ms=round(p_latency),
                 )
+                next_idx = i + 1
+                if next_idx < len(providers):
+                    next_cfg = providers[next_idx]
+                    logger.info(
+                        "failover",
+                        request_id=request_id,
+                        from_provider=provider_cfg.name,
+                        from_model=provider_cfg.model,
+                        to_provider=next_cfg.name,
+                        to_model=next_cfg.model,
+                        reason="retryable_error",
+                        circuit_broken=e.immediate_break,
+                    )
 
             except NonRetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
                 errors.append(
                     {
-                        "provider": provider_cfg.type,
+                        "provider": provider_cfg.name,
                         "model": provider_cfg.model,
                         "priority": provider_cfg.priority,
                         "error": str(e),
@@ -121,7 +141,7 @@ class Router:
                 logger.error(
                     "provider.fail",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     error=str(e),
                     retry=False,
@@ -185,6 +205,8 @@ class Router:
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
 
+                self.circuit_breaker.record_success(provider_cfg.name)
+
                 logger.info(
                     "provider.success",
                     request_id=request_id,
@@ -206,9 +228,12 @@ class Router:
 
             except RetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
+                self.circuit_breaker.record_failure(
+                    provider_cfg.name, immediate=e.immediate_break
+                )
                 errors.append(
                     {
-                        "provider": provider_cfg.type,
+                        "provider": provider_cfg.name,
                         "model": provider_cfg.model,
                         "priority": provider_cfg.priority,
                         "error": str(e),
@@ -218,18 +243,31 @@ class Router:
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     error=str(e),
                     retry=True,
                     provider_latency_ms=round(p_latency),
                 )
+                next_idx = i + 1
+                if next_idx < len(providers):
+                    next_cfg = providers[next_idx]
+                    logger.info(
+                        "failover",
+                        request_id=request_id,
+                        from_provider=provider_cfg.name,
+                        from_model=provider_cfg.model,
+                        to_provider=next_cfg.name,
+                        to_model=next_cfg.model,
+                        reason="retryable_error",
+                        circuit_broken=e.immediate_break,
+                    )
 
             except NonRetryableError as e:
                 p_latency = (time.time() - p_start) * 1000
                 errors.append(
                     {
-                        "provider": provider_cfg.type,
+                        "provider": provider_cfg.name,
                         "model": provider_cfg.model,
                         "priority": provider_cfg.priority,
                         "error": str(e),
@@ -239,7 +277,7 @@ class Router:
                 logger.error(
                     "provider.fail",
                     request_id=request_id,
-                    provider=provider_cfg.type,
+                    provider=provider_cfg.name,
                     model=provider_cfg.model,
                     error=str(e),
                     retry=False,
@@ -269,7 +307,28 @@ class Router:
     def _get_providers(self, virtual_model: str) -> list[ProviderConfig]:
         if virtual_model not in self.config.models:
             raise UnknownModelError(virtual_model, list(self.config.models.keys()))
-        return self.config.models[virtual_model]
+
+        all_providers = self.config.models[virtual_model]
+        available: list[ProviderConfig] = []
+        skipped: list[dict] = []
+
+        for p in all_providers:
+            if self.circuit_breaker.is_available(p.name):
+                available.append(p)
+            else:
+                skipped.append(
+                    {"provider": p.name, "model": p.model, "state": self.circuit_breaker.state(p.name).value}
+                )
+
+        if skipped:
+            logger.info(
+                "circuit.providers_skipped",
+                model=virtual_model,
+                skipped=skipped,
+                available_count=len(available),
+            )
+
+        return available
 
     @property
     def model_names(self) -> list[str]:

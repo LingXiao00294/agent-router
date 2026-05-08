@@ -25,7 +25,8 @@ agent-router/
 │   ├── main.py                     # 入口: argparse + uvicorn
 │   ├── app.py                      # FastAPI 应用 + 路由处理器
 │   ├── config.py                   # TOML 加载 + ${ENV_VAR} 插值 + Pydantic 校验
-│   ├── routing.py                  # 核心: 优先级链 + 故障转移
+│   ├── routing.py                  # 核心: 优先级链 + 故障转移 + 熔断
+│   ├── circuit_breaker.py          # Per-provider 熔断器 (CLOSED/OPEN/HALF_OPEN)
 │   ├── providers/
 │   │   ├── __init__.py
 │   │   ├── base.py                 # 抽象 Provider 接口
@@ -53,6 +54,7 @@ agent-router/
     ├── conftest.py
     ├── test_config.py
     ├── test_routing.py
+    ├── test_circuit_breaker.py
     ├── test_providers.py
     └── test_integration.py
 ```
@@ -168,18 +170,50 @@ class AppConfig(BaseModel):
 
 **错误分类：**
 
-| 错误 | 是否重试 | 说明 |
-|---|---|---|
-| HTTP 429 | ✅ 重试 | 限流 |
-| HTTP 5xx | ✅ 重试 | 服务端错误 |
-| `httpx.ConnectError` | ✅ 重试 | DNS/连接拒绝 |
-| `httpx.ConnectTimeout` | ✅ 重试 | 网络不通 |
-| `httpx.ReadTimeout` | ✅ 重试 | 响应超时 |
-| `httpx.RemoteProtocolError` | ✅ 重试 | 连接异常关闭 |
-| HTTP 400-428, 430-499 | ❌ 不重试 | 客户端错误/鉴权失败 |
-| 响应非 JSON | ❌ 不重试 | 协议错误 |
+| 错误 | 是否重试 | 熔断 | 说明 |
+|---|---|---|---|
+| HTTP 401 | ✅ 故障转移 | 🔴 立即熔断 | 认证失败，不会自动恢复 |
+| HTTP 403 | ✅ 故障转移 | 🔴 立即熔断 | 权限不足，不会自动恢复 |
+| HTTP 429 | ✅ 故障转移 | 🟡 连续触发 | 限流 |
+| HTTP 529 | ✅ 故障转移 | 🟡 连续触发 | API 过载 |
+| HTTP 5xx | ✅ 故障转移 | 🟡 连续触发 | 服务端错误 |
+| `httpx.ConnectError` | ✅ 故障转移 | 🟡 连续触发 | DNS/连接拒绝 |
+| `httpx.ConnectTimeout` | ✅ 故障转移 | 🟡 连续触发 | 网络不通 |
+| `httpx.ReadTimeout` | ✅ 故障转移 | 🟡 连续触发 | 响应超时 |
+| `httpx.RemoteProtocolError` | ✅ 故障转移 | 🟡 连续触发 | 连接异常关闭 |
+| HTTP 400, 404, 其他 4xx | ❌ 不重试 | — | 客户端错误，立即返回 |
+| 响应非 JSON | ❌ 不重试 | — | 协议错误 |
 
-### 3. providers/ — 适配器
+### 3. circuit_breaker.py — 熔断器
+
+Per-provider 熔断器，防止持续向故障 provider 发送请求。
+
+**状态机：**
+
+```
+CLOSED ──(连续失败达阈值)──→ OPEN
+  ↑                            │
+  │                            └──(recovery_timeout 后)──→ HALF_OPEN
+  │                                                            │
+  └──(探测成功)────────────────────────────────────────────────┘
+HALF_OPEN ──(探测失败)──→ OPEN
+```
+
+- **CLOSED**: 正常状态，请求通过
+- **OPEN**: 熔断状态，请求被跳过，等待恢复超时
+- **HALF_OPEN**: 半开状态，允许一次探测请求
+
+**参数：**
+- `failure_threshold` (默认 5): 连续失败次数阈值，达到后熔断
+- `recovery_timeout` (默认 60s): 熔断后等待恢复的时间
+
+**熔断触发策略：**
+- 401/403 (认证/权限错误) → 立即熔断（这类错误不会自动恢复）
+- 429/529/5xx (限流/过载/服务端错误) → 连续失败达阈值后熔断
+
+**集成方式：** Router 在 `_get_providers()` 中通过 `circuit_breaker.is_available()` 过滤已熔断的 provider，在路由成功/失败时调用 `record_success()`/`record_failure()` 更新状态。
+
+### 4. providers/ — 适配器
 
 #### base.py — 抽象接口
 
@@ -267,7 +301,7 @@ data: {"type":"message_stop"}
 
 这是整个项目最复杂的部分，先实现非流式，流式转换作为后续增强。
 
-### 4. app.py — FastAPI 应用
+### 5. app.py — FastAPI 应用
 
 **端点：**
 
@@ -297,7 +331,7 @@ data: {"type":"message_stop"}
 }
 ```
 
-### 5. main.py — 入口
+### 6. main.py — 入口
 
 ```python
 def main():
@@ -315,7 +349,7 @@ def main():
     uvicorn.run(app, host=config.server.host, port=config.server.port)
 ```
 
-### 6. db.py — 调用记录持久化
+### 7. db.py — 调用记录持久化
 
 使用 `aiosqlite` 异步写入 SQLite，记录每次 API 调用的完整信息。
 
@@ -359,7 +393,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 
 **写入时机：** 每次请求完成后（成功或失败），异步写入 SQLite，不阻塞主请求流程。
 
-### 7. api/metrics.py — 数据查询 API
+### 8. api/metrics.py — 数据查询 API
 
 为 dashboard 提供数据查询接口：
 
@@ -372,7 +406,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 | `GET` | `/api/calls/{id}` | 单次调用详情 (含完整 request/response) |
 | `GET` | `/api/metrics/daily` | 每日调用趋势 (最近 30 天) |
 
-### 8. monitoring.py — 日志
+### 9. monitoring.py — 日志
 
 使用 `structlog` 记录结构化日志，覆盖请求全生命周期：
 
@@ -401,7 +435,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 
 每条日志带 `request_id` 方便串联排查。
 
-### 9. Dashboard (Vue) — 后期完善
+### 10. Dashboard (Vue) — 后期完善
 
 Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
 
@@ -459,11 +493,12 @@ dashboard 作为独立目录，后期完善。初期可以先只做 API 接口�
 | 决策 | 选择 | 理由 |
 |---|---|---|
 | 配置格式 | TOML | Python 标准库支持，项目统一 (pyproject.toml)，可读性好 |
-| 路由状态 | 无状态 | 每请求独立遍历 provider 链，避免分布式同步复杂度 |
+| 路由状态 | 有状态 (熔断器) | 每请求独立遍历 provider 链，但通过熔断器跳过持续故障的 provider |
 | 流式故障转移 | 无缓冲直传 | SSE 字节边收边发，优先保证延迟；流中断由 Claude Code 自动重试触发下一 provider |
 | HTTP 客户端 | 单实例复用 | 进程级 httpx.AsyncClient，按 base_url 自动连接池隔离 |
 | 配置热更新 | 不支持 | 重启进程更新配置，简单可靠 |
 | Provider 接口 | 统一 Anthropic 格式 | routing.py 不感知后端协议，OpenAI 适配器内部转换 |
+| 熔断策略 | Per-provider 三态 | 401/403 立即熔断，429/529/5xx 连续失败后熔断，60s 后半开探测 |
 
 ---
 
@@ -473,8 +508,11 @@ dashboard 作为独立目录，后期完善。初期可以先只做 API 接口�
 |---|---|
 | 虚拟模型未配置 | 400 + 已知模型列表 |
 | 所有 provider 失败 | 502 + 聚合错误详情 |
+| 所有 provider 熔断 | 502 (无可用 provider) |
+| provider 返回 401/403 | 故障转移 + 立即熔断该 provider |
+| provider 连续返回 429/529/5xx | 故障转移 + 达阈值后熔断 |
+| 熔断 provider 恢复 | 60s 后半开探测，成功则关闭熔断器 |
 | 环境变量未设置 | 启动失败，明确指出哪个模型/优先级 |
-| 配置中无任何模型 | 启动失败 |
 | provider 返回非 JSON | 不可重试，立即返回 502 |
 | 流传输中断 | 关闭客户端连接，日志记录 |
 | 客户端断开 | 取消上游请求 (asyncio.CancelledError) |
