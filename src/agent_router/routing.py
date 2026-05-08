@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -12,6 +14,55 @@ from agent_router.providers.anthropic_compat import AnthropicCompatProvider
 from agent_router.providers.base import BaseProvider, NonRetryableError, RetryableError
 
 logger = structlog.get_logger(__name__)
+
+# SSE error event pattern: event: error followed by data: {...}
+_SSE_ERROR_EVENT_RE = re.compile(
+    rb"event:\s*error\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
+)
+
+# Error types that should trigger failover (same as RETRYABLE_STATUSES)
+_RETRYABLE_ERROR_TYPES = {
+    "rate_limit_error",
+    "overloaded_error",
+    "api_error",
+    "overloaded",
+}
+
+# Error types that should immediately circuit break (same as AUTH_STATUSES)
+_AUTH_ERROR_TYPES = {
+    "authentication_error",
+    "permission_error",
+}
+
+
+def _check_stream_error(buffer: bytes) -> None:
+    """Check SSE buffer for error events and raise appropriate exception.
+
+    This detects errors in streaming responses that return HTTP 200 but
+    contain error events in the stream (like rate limit exceeded).
+    """
+    m = _SSE_ERROR_EVENT_RE.search(buffer)
+    if not m:
+        return
+
+    try:
+        data = json.loads(m.group(1))
+        error = data.get("error", {})
+        error_type = error.get("type", "")
+        error_message = error.get("message", "Unknown stream error")
+
+        if error_type in _AUTH_ERROR_TYPES:
+            raise RetryableError(
+                f"Stream error ({error_type}): {error_message}",
+                immediate_break=True,
+            )
+        if error_type in _RETRYABLE_ERROR_TYPES:
+            raise RetryableError(f"Stream error ({error_type}): {error_message}")
+        # Default to retryable for unknown error types in stream
+        raise RetryableError(f"Stream error ({error_type}): {error_message}")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        # If we can't parse the error, still raise as retryable
+        raise RetryableError(f"Stream error: {m.group(1).decode(errors='replace')[:500]}")
 
 
 def _create_provider(config: ProviderConfig, http_client) -> BaseProvider:
@@ -203,7 +254,14 @@ class Router:
 
             try:
                 p_start = time.time()
+                stream_buffer = b""
                 async for chunk in provider.send_stream(request_body):
+                    stream_buffer += chunk
+                    # Limit buffer size to avoid memory issues
+                    if len(stream_buffer) > 32768:
+                        stream_buffer = stream_buffer[-16384:]
+                    # Check for error events before yielding to client
+                    _check_stream_error(stream_buffer)
                     yield chunk
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
