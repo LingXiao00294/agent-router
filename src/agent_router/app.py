@@ -129,6 +129,7 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                    failover_details=outcome.get("_failures"),
                 )
                 return JSONResponse(result)
 
@@ -154,6 +155,10 @@ def create_app(
 
         except AllProvidersFailedError as e:
             latency_ms = int((time.time() - start_time) * 1000)
+            failover = [
+                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                for err in e.errors
+            ]
             await store.record(
                 virtual_model=virtual_model,
                 status="error",
@@ -161,6 +166,7 @@ def create_app(
                 error_message=str(e),
                 latency_ms=latency_ms,
                 request_body=body,
+                failover_details=failover,
             )
             return JSONResponse(
                 {
@@ -251,9 +257,16 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            failover_details=outcome.get("_failures"),
         )
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
+        failover = None
+        if isinstance(e, AllProvidersFailedError):
+            failover = [
+                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                for err in e.errors
+            ]
         await store.record(
             virtual_model=virtual_model,
             status="error",
@@ -261,6 +274,7 @@ async def _stream_wrapper(
             error_message=str(e),
             latency_ms=latency_ms,
             request_body=request_body,
+            failover_details=failover,
         )
         error_body = json.dumps(
             {

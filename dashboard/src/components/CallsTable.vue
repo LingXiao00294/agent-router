@@ -20,7 +20,10 @@
         <tr v-for="call in calls" :key="call.id" @click="$emit('select', call.id)" class="clickable">
           <td>{{ formatTime(call.timestamp) }}</td>
           <td>{{ call.virtual_model }}</td>
-          <td>{{ call.provider_name || call.provider_type || "-" }}</td>
+          <td>
+            {{ call.provider_name || call.provider_type || "-" }}
+            <span v-if="call.attempt > 1" class="failover-badge" :title="`经过 ${call.attempt} 次尝试`">→{{ call.attempt }}</span>
+          </td>
           <td>{{ call.provider_model || "-" }}</td>
           <td>
             <span :class="call.status === 'success' ? 'badge-success' : 'badge-error'">
@@ -87,6 +90,11 @@ tr.clickable { cursor: pointer; }
 tr.clickable:hover { background: #313244; }
 .badge-success { color: #a6e3a1; }
 .badge-error { color: #f38ba8; }
+.failover-badge {
+  display: inline-block; margin-left: 4px; padding: 1px 5px;
+  background: #45475a; color: #f9e2af; font-size: 11px;
+  border-radius: 3px; cursor: help;
+}
 .empty { text-align: center; color: #6c7086; padding: 24px; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 12px; color: #bac2de; font-size: 13px; }
 .pagination button { background: #313244; color: #cdd6f4; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }

@@ -158,6 +158,15 @@ class Router:
                         "retryable": True,
                     }
                 )
+                if outcome is not None:
+                    outcome.setdefault("_failures", []).append(
+                        {
+                            "provider": provider_cfg.name,
+                            "model": provider_cfg.model,
+                            "error": str(e),
+                            "latency_ms": round(p_latency),
+                        }
+                    )
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,
@@ -301,6 +310,15 @@ class Router:
                         "retryable": True,
                     }
                 )
+                if outcome is not None:
+                    outcome.setdefault("_failures", []).append(
+                        {
+                            "provider": provider_cfg.name,
+                            "model": provider_cfg.model,
+                            "error": str(e),
+                            "latency_ms": round(p_latency),
+                        }
+                    )
                 logger.warning(
                     "provider.fail",
                     request_id=request_id,

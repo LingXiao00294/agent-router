@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS calls (
     output_tokens   INTEGER,
     cache_read_tokens   INTEGER,
     cache_write_tokens  INTEGER,
-    cost_usd        REAL
+    cost_usd        REAL,
+    failover_details TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_calls_timestamp ON calls(timestamp DESC);
@@ -51,6 +52,11 @@ class CallStore:
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA)
+        # Migration: add failover_details column if missing (pre-existing DBs)
+        try:
+            await self._conn.execute("ALTER TABLE calls ADD COLUMN failover_details TEXT")
+        except aiosqlite.OperationalError:
+            pass  # column already exists
         await self._conn.commit()
         logger.info("db.init", path=str(self.db_path))
 
@@ -79,6 +85,7 @@ class CallStore:
         cache_read_tokens: int | None = None,
         cache_write_tokens: int | None = None,
         cost_usd: float | None = None,
+        failover_details: list[dict] | None = None,
     ) -> str:
         call_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -86,19 +93,22 @@ class CallStore:
         request_tokens = _estimate_request_tokens(request_body)
         resp_json = json.dumps(response_body, ensure_ascii=False) if response_body else None
         req_json = json.dumps(request_body, ensure_ascii=False) if request_body else None
+        fo_json = json.dumps(failover_details, ensure_ascii=False) if failover_details else None
 
         await self._conn.execute(
             """INSERT INTO calls (
                 id, timestamp, virtual_model, provider_name, provider_type, provider_model,
                 provider_url, attempt, latency_ms, request_body, request_tokens,
                 status, error_type, error_message, response_body,
-                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                failover_details
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 call_id, now, virtual_model, provider_name, provider_type, provider_model,
                 provider_url, attempt, latency_ms, req_json, request_tokens,
                 status, error_type, error_message, resp_json,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                fo_json,
             ),
         )
         await self._conn.commit()

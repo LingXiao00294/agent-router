@@ -13,6 +13,13 @@ export interface Summary {
   avg_latency_ms: number;
 }
 
+export interface FailoverEntry {
+  provider: string;
+  model: string;
+  error: string;
+  latency_ms?: number;
+}
+
 export interface CallRecord {
   id: string;
   timestamp: string;
@@ -34,6 +41,7 @@ export interface CallRecord {
   request_body: string | null;
   response_body: string | null;
   request_tokens: number | null;
+  failover_details: string | null;
 }
 
 export interface CallsPage {
