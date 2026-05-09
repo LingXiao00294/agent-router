@@ -85,6 +85,8 @@ class Router:
     async def reload_config(self, new_config: AppConfig) -> None:
         """热重载配置，保留 http_client 和熔断器状态."""
         self.config = new_config
+        self.circuit_breaker.failure_threshold = new_config.router.failure_threshold
+        self.circuit_breaker.recovery_timeout = new_config.router.recovery_timeout
 
     async def _handle_provider_error(
         self,

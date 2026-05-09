@@ -180,9 +180,19 @@ def create_config_router(
         """全量更新配置并写回 config.toml.
 
         api_key 为空或脱敏值时保留原有值，防止误覆盖.
+        缺少 router/models 段时合并已有配置，防止误丢失.
         """
         try:
             existing = _read_config_raw(config_path)
+            body = deepcopy(body)
+
+            # 合并缺失段：router、models
+            if "router" not in body:
+                body["router"] = existing.get("router", {})
+            if "models" not in body:
+                body["models"] = existing.get("models", {})
+
+            # api_key 脱敏值保留原有值
             existing_providers = existing.get("providers", {})
             for pname, pdata in body.get("providers", {}).items():
                 api_key = pdata.get("api_key", "")
