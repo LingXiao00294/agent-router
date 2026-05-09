@@ -5,6 +5,11 @@ host = "127.0.0.1"
 port = 9456
 log_level = "debug"
 
+# 路由/熔断器参数
+[router]
+failure_threshold = 5       # 连续失败多少次后熔断该 provider
+recovery_timeout = 600      # 熔断后等待多少秒进入半开探测 (默认 10 分钟)
+
 # ============================================================
 # Provider 定义 — 每个 provider 只需配置一次
 #   取消注释并填入你的 provider 信息

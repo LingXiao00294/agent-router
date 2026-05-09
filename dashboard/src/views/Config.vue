@@ -27,6 +27,30 @@
         </div>
       </section>
 
+      <!-- Router -->
+      <section class="section">
+        <h3>Router</h3>
+        <div class="server-card">
+          <label>熔断阈值 <input v-model.number="routerConfig.failure_threshold" type="number" class="input short" /> 次连续失败</label>
+          <label>恢复超时 <input v-model.number="routerConfig.recovery_timeout" type="number" class="input short" /> 秒</label>
+        </div>
+      </section>
+
+      <!-- Circuit Breaker -->
+      <section class="section" v-if="Object.keys(circuitStates).length > 0">
+        <div class="section-header">
+          <h3>熔断状态</h3>
+          <button class="add-btn" @click="loadCircuitStates">刷新</button>
+        </div>
+        <div class="server-card">
+          <div v-for="(state, name) in circuitStates" :key="name" class="cb-row">
+            <span class="cb-name">{{ name }}</span>
+            <span class="cb-state" :class="stateClass[state] || 'state-ok'">{{ stateLabel[state] || state }}</span>
+            <button v-if="state !== 'closed'" class="del-btn small" @click="handleResetProvider(name)">重置</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Providers -->
       <section class="section">
         <div class="section-header">
@@ -41,9 +65,11 @@
           </div>
           <div class="card-body">
             <label>类型 <select v-model="p.type" class="input"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
-            <label>API Key <input v-model="p.api_key" type="password" placeholder="sk-..." class="input" /></label>
+            <label>API Key <input v-model="p.api_key" type="password" :placeholder="p.has_key ? '(留空则保留当前 key)' : 'sk-...'" class="input" /></label>
             <label>Base URL <input v-model="p.base_url" placeholder="https://api.anthropic.com" class="input" /></label>
             <label>超时 <input v-model.number="p.timeout_seconds" type="number" class="input short" /> 秒</label>
+            <label>熔断阈值 <input v-model.number="p.failure_threshold" type="number" class="input short" placeholder="默认" /> 次</label>
+            <label>恢复超时 <input v-model.number="p.recovery_timeout" type="number" class="input short" placeholder="默认" /> 秒</label>
           </div>
         </div>
       </section>
@@ -94,7 +120,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchConfig, fetchConfigModels, updateConfig } from "../api";
+import { fetchConfig, fetchConfigModels, updateConfig, fetchCircuitBreakerStates, resetCircuitBreaker } from "../api";
 
 const loading = ref(true);
 const saving = ref(false);
@@ -103,12 +129,17 @@ const messageType = ref("success");
 
 const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug" });
 
+const routerConfig = ref({ failure_threshold: 5, recovery_timeout: 600 });
+
 interface ProviderEntry {
   name: string;
   type: string;
   api_key: string;
   base_url: string;
   timeout_seconds: number;
+  has_key?: boolean;
+  failure_threshold?: number | null;
+  recovery_timeout?: number | null;
 }
 
 interface ModelRef {
@@ -124,8 +155,41 @@ interface ModelEntry {
 
 const providerEntries = ref<ProviderEntry[]>([]);
 const modelEntries = ref<ModelEntry[]>([]);
+const circuitStates = ref<Record<string, string>>({});
 
 const providerNames = computed(() => providerEntries.value.map((p) => p.name).filter(Boolean));
+
+async function loadCircuitStates() {
+  try {
+    circuitStates.value = await fetchCircuitBreakerStates();
+  } catch {
+    circuitStates.value = {};
+  }
+}
+
+async function handleResetProvider(name: string) {
+  try {
+    await resetCircuitBreaker(name);
+    await loadCircuitStates();
+    message.value = `已重置 ${name} 的熔断状态`;
+    messageType.value = "success";
+  } catch (e: any) {
+    message.value = e.message;
+    messageType.value = "error";
+  }
+}
+
+const stateLabel: Record<string, string> = {
+  closed: "正常",
+  open: "已熔断",
+  half_open: "半开",
+};
+
+const stateClass: Record<string, string> = {
+  closed: "state-ok",
+  open: "state-error",
+  half_open: "state-warn",
+};
 
 async function loadConfig() {
   loading.value = true;
@@ -133,6 +197,7 @@ async function loadConfig() {
     fetchConfig(),
     fetchConfigModels(),
   ]);
+  loadCircuitStates();
 
   if (providers.server) {
     serverConfig.value = {
@@ -142,12 +207,22 @@ async function loadConfig() {
     };
   }
 
+  if (providers.router) {
+    routerConfig.value = {
+      failure_threshold: providers.router.failure_threshold ?? 5,
+      recovery_timeout: providers.router.recovery_timeout ?? 600,
+    };
+  }
+
   providerEntries.value = Object.entries(providers.providers || {}).map(([name, p]: [string, any]) => ({
     name,
     type: p.type || "anthropic",
-    api_key: "",
+    api_key: p.api_key || "",
     base_url: p.base_url || "",
     timeout_seconds: p.timeout_seconds || 120,
+    has_key: !!p.has_key,
+    failure_threshold: p.failure_threshold ?? null,
+    recovery_timeout: p.recovery_timeout ?? null,
   }));
 
   modelEntries.value = Object.entries(models).map(([name, refs]: [string, any]) => ({
@@ -163,7 +238,7 @@ async function loadConfig() {
 }
 
 function addProvider() {
-  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120 });
+  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120, has_key: false, failure_threshold: null, recovery_timeout: null });
 }
 function removeProvider(idx: number) {
   const name = providerEntries.value[idx]?.name;
@@ -191,32 +266,32 @@ function removeRef(m: ModelEntry, idx: number) {
 
 // --- 拖拽排序 ---
 interface DragInfo { model: ModelEntry; idx: number }
-let dragInfo: DragInfo | null = null;
-let dragOverEl: HTMLElement | null = null;
+const dragInfo = ref<DragInfo | null>(null);
+const dragOverEl = ref<HTMLElement | null>(null);
 
 function onDragStart(e: DragEvent, model: ModelEntry, idx: number) {
-  dragInfo = { model, idx };
+  dragInfo.value = { model, idx };
   (e.target as HTMLElement)?.classList.add("dragging");
   e.dataTransfer!.effectAllowed = "move";
 }
 function onDragOver(e: DragEvent) {
   e.dataTransfer!.dropEffect = "move";
-  dragOverEl?.classList.remove("drag-over");
-  dragOverEl = (e.target as HTMLElement)?.closest(".ref-row");
-  dragOverEl?.classList.add("drag-over");
+  dragOverEl.value?.classList.remove("drag-over");
+  dragOverEl.value = (e.target as HTMLElement)?.closest(".ref-row");
+  dragOverEl.value?.classList.add("drag-over");
 }
 function onDrop(_e: DragEvent, targetModel: ModelEntry, targetIdx: number) {
-  if (!dragInfo || dragInfo.model !== targetModel) return;
+  if (!dragInfo.value || dragInfo.value.model !== targetModel) return;
   const refs = targetModel.refs;
-  const [item] = refs.splice(dragInfo.idx, 1);
-  const actualTarget = dragInfo.idx < targetIdx ? targetIdx - 1 : targetIdx;
+  const [item] = refs.splice(dragInfo.value.idx, 1);
+  const actualTarget = dragInfo.value.idx < targetIdx ? targetIdx - 1 : targetIdx;
   refs.splice(actualTarget, 0, item);
 }
 function onDragEnd(e: DragEvent) {
   (e.target as HTMLElement)?.classList.remove("dragging");
-  dragOverEl?.classList.remove("drag-over");
-  dragInfo = null;
-  dragOverEl = null;
+  dragOverEl.value?.classList.remove("drag-over");
+  dragInfo.value = null;
+  dragOverEl.value = null;
 }
 
 async function saveConfig() {
@@ -225,6 +300,7 @@ async function saveConfig() {
 
   const body: any = {
     server: { ...serverConfig.value },
+    router: { ...routerConfig.value },
     providers: {},
     models: {},
   };
@@ -236,6 +312,8 @@ async function saveConfig() {
       api_key: p.api_key || "${PLACEHOLDER}",
       base_url: p.base_url,
       timeout_seconds: p.timeout_seconds,
+      failure_threshold: p.failure_threshold ?? null,
+      recovery_timeout: p.recovery_timeout ?? null,
     };
   }
 
@@ -339,6 +417,17 @@ onMounted(loadConfig);
   min-width: 22px; text-align: center; border-radius: 4px; padding: 2px 4px;
 }
 .flex-1 { flex: 1; }
+
+.cb-row {
+  display: flex; align-items: center; gap: 12px; padding: 6px 0;
+}
+.cb-name { font-size: 13px; min-width: 120px; }
+.cb-state {
+  font-size: 12px; padding: 2px 8px; border-radius: 4px;
+}
+.state-ok { background: #a6e3a122; color: #a6e3a1; }
+.state-warn { background: #f9e2af22; color: #f9e2af; }
+.state-error { background: #f38ba822; color: #f38ba8; }
 
 .toast {
   position: fixed; bottom: 24px; right: 24px;

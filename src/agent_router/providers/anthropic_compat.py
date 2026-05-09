@@ -9,7 +9,8 @@ from agent_router.providers.base import BaseProvider, NonRetryableError, Retryab
 
 logger = get_logger(__name__)
 
-RETRYABLE_STATUSES: set[int] = {401, 403, 429, 500, 502, 503, 504}
+RETRYABLE_STATUSES: set[int] = {429, 500, 502, 503, 504, 529}
+AUTH_STATUSES: set[int] = {401, 403}
 RETRYABLE_EXCEPTIONS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -20,6 +21,11 @@ RETRYABLE_EXCEPTIONS = (
 
 
 def _classify_error(e: httpx.HTTPStatusError) -> Exception:
+    if e.response.status_code in AUTH_STATUSES:
+        return RetryableError(
+            f"HTTP {e.response.status_code}: {e.response.text[:500]}",
+            immediate_break=True,
+        )
     if e.response.status_code in RETRYABLE_STATUSES:
         return RetryableError(f"HTTP {e.response.status_code}: {e.response.text[:500]}")
     return NonRetryableError(f"HTTP {e.response.status_code}: {e.response.text[:500]}")

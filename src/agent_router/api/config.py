@@ -73,14 +73,28 @@ def _write_toml(config_path: str, data: dict) -> None:
     server = data.get("server", {})
     lines.append("[server]")
     for k, v in server.items():
+        if v is None:
+            continue
         lines.append(f"{k} = {_toml_value(v)}")
     lines.append("")
+
+    # [router]
+    router = data.get("router")
+    if router:
+        lines.append("[router]")
+        for k, v in router.items():
+            if v is None:
+                continue
+            lines.append(f"{k} = {_toml_value(v)}")
+        lines.append("")
 
     # [providers.*]
     providers = data.get("providers", {})
     for name, pdata in providers.items():
         lines.append(f"[providers.{_toml_key(name)}]")
         for k, v in pdata.items():
+            if v is None:
+                continue
             lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
 
@@ -90,6 +104,8 @@ def _write_toml(config_path: str, data: dict) -> None:
         for ref in refs:
             lines.append(f"[[models.{_toml_key(vname)}]]")
             for k, v in ref.items():
+                if v is None:
+                    continue
                 lines.append(f"{k} = {_toml_value(v)}")
             lines.append("")
 
@@ -120,6 +136,7 @@ def create_config_router(config_path: str) -> APIRouter:
         safe = deepcopy(raw)
         for pname, pdata in safe.get("providers", {}).items():
             if "api_key" in pdata:
+                pdata["has_key"] = bool(pdata["api_key"])
                 pdata["api_key"] = _mask_key(pdata["api_key"])
         return safe
 

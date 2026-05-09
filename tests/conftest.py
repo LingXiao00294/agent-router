@@ -14,6 +14,7 @@ def sample_config() -> AppConfig:
             "haiku-router": [
                 ProviderConfig(
                     type="anthropic",
+                    name="anthropic",
                     model="claude-haiku-4-5-20251001",
                     api_key="test-key-1",
                     base_url="https://api.anthropic.com",
@@ -21,6 +22,7 @@ def sample_config() -> AppConfig:
                 ),
                 ProviderConfig(
                     type="anthropic",
+                    name="zhipu",
                     model="glm-5.1",
                     api_key="test-key-2",
                     base_url="https://api.z.ai/api/anthropic",
@@ -30,6 +32,7 @@ def sample_config() -> AppConfig:
             "sonnet-router": [
                 ProviderConfig(
                     type="anthropic",
+                    name="anthropic",
                     model="claude-sonnet-4-5-20250929",
                     api_key="test-key-3",
                     base_url="https://api.anthropic.com",
@@ -41,5 +44,6 @@ def sample_config() -> AppConfig:
 
 
 @pytest.fixture
-def http_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient()
+async def http_client():
+    async with httpx.AsyncClient() as client:
+        yield client

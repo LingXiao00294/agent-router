@@ -16,6 +16,8 @@ config.toml
 
 
 calls.db
+*.db-journal
 
 
 .claude
+TODO.md

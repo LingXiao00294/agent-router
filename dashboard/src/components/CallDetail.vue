@@ -20,6 +20,29 @@
               {{ call.status }}
             </span>
           </div>
+        </div>
+
+        <div v-if="failoverList.length" class="section failover-section">
+          <h4>故障转移链路</h4>
+          <div class="failover-chain">
+            <div v-for="(fo, i) in failoverList" :key="i" class="failover-entry">
+              <span class="failover-step">{{ i + 1 }}</span>
+              <span class="failover-provider">{{ fo.provider }}</span>
+              <span class="failover-model">{{ fo.model }}</span>
+              <span class="failover-error">{{ fo.error }}</span>
+              <span v-if="fo.latency_ms != null" class="failover-latency">{{ fo.latency_ms }}ms</span>
+            </div>
+            <div class="failover-entry success">
+              <span class="failover-step">{{ failoverList.length + 1 }}</span>
+              <span class="failover-provider">{{ call.provider_name || call.provider_type }}</span>
+              <span class="failover-model">{{ call.provider_model }}</span>
+              <span class="failover-ok">✓ 成功</span>
+              <span v-if="call.latency_ms != null" class="failover-latency">{{ call.latency_ms }}ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-grid">
           <div class="kv"><span class="key">延迟</span><span class="value">{{ call.latency_ms }}ms</span></div>
           <div class="kv"><span class="key">输入 Token</span><span class="value">{{ call.input_tokens ?? "-" }}</span></div>
           <div class="kv"><span class="key">输出 Token</span><span class="value">{{ call.output_tokens ?? "-" }}</span></div>
@@ -48,10 +71,20 @@
 </template>
 
 <script setup lang="ts">
-import type { CallRecord } from "../api";
+import { computed } from "vue";
+import type { CallRecord, FailoverEntry } from "../api";
 
-defineProps<{ call: CallRecord | null }>();
+const props = defineProps<{ call: CallRecord | null }>();
 defineEmits<{ close: [] }>();
+
+const failoverList = computed<FailoverEntry[]>(() => {
+  if (!props.call?.failover_details) return [];
+  try {
+    return JSON.parse(props.call.failover_details);
+  } catch {
+    return [];
+  }
+});
 
 function fmt(ts: string) {
   return ts ? new Date(ts).toLocaleString() : "-";
@@ -102,6 +135,22 @@ function fmtJson(raw: any) {
   max-height: 300px; overflow: auto;
 }
 .error-block { color: #f38ba8; }
+.failover-chain { display: flex; flex-direction: column; gap: 4px; }
+.failover-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: #11111b; border-radius: 4px;
+  font-size: 12px; border-left: 3px solid #f38ba8;
+}
+.failover-entry.success { border-left-color: #a6e3a1; }
+.failover-step {
+  background: #313244; color: #a6adc8; min-width: 20px;
+  text-align: center; border-radius: 3px; padding: 1px 4px; font-size: 11px;
+}
+.failover-provider { color: #cdd6f4; font-weight: 600; }
+.failover-model { color: #6c7086; }
+.failover-error { color: #f38ba8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failover-ok { color: #a6e3a1; }
+.failover-latency { color: #6c7086; white-space: nowrap; }
 @media (max-width: 600px) {
   .detail-grid { grid-template-columns: 1fr; }
 }

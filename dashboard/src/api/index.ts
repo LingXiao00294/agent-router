@@ -13,6 +13,13 @@ export interface Summary {
   avg_latency_ms: number;
 }
 
+export interface FailoverEntry {
+  provider: string;
+  model: string;
+  error: string;
+  latency_ms?: number;
+}
+
 export interface CallRecord {
   id: string;
   timestamp: string;
@@ -34,6 +41,7 @@ export interface CallRecord {
   request_body: string | null;
   response_body: string | null;
   request_tokens: number | null;
+  failover_details: string | null;
 }
 
 export interface CallsPage {
@@ -109,6 +117,22 @@ export async function updateConfig(body: any): Promise<any> {
   if (!res.ok) {
     const data = await res.json();
     throw new Error(data.detail || "保存失败");
+  }
+  return res.json();
+}
+
+export async function fetchCircuitBreakerStates(): Promise<Record<string, string>> {
+  const res = await fetch(`${BASE}/circuit-breaker`);
+  return res.json();
+}
+
+export async function resetCircuitBreaker(provider: string): Promise<any> {
+  const res = await fetch(`${BASE}/circuit-breaker/${encodeURIComponent(provider)}/reset`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.detail || "重置失败");
   }
   return res.json();
 }

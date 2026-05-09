@@ -68,6 +68,18 @@ def create_app(
     async def health():
         return {"status": "ok"}
 
+    @app.get("/api/circuit-breaker")
+    async def get_circuit_breaker_states():
+        """返回所有 provider 的熔断状态."""
+        states = await router_engine.circuit_breaker.get_all_states()
+        return {name: state.value for name, state in states.items()}
+
+    @app.post("/api/circuit-breaker/{provider}/reset")
+    async def reset_circuit_breaker(provider: str):
+        """重置指定 provider 的熔断状态."""
+        await router_engine.circuit_breaker.reset(provider)
+        return {"status": "ok", "provider": provider}
+
     @app.get("/v1/models")
     async def list_models():
         """Anthropic List Models 格式."""
@@ -129,6 +141,7 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                    failover_details=outcome.get("_failures"),
                 )
                 return JSONResponse(result)
 
@@ -154,6 +167,10 @@ def create_app(
 
         except AllProvidersFailedError as e:
             latency_ms = int((time.time() - start_time) * 1000)
+            failover = [
+                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                for err in e.errors
+            ]
             await store.record(
                 virtual_model=virtual_model,
                 status="error",
@@ -161,6 +178,7 @@ def create_app(
                 error_message=str(e),
                 latency_ms=latency_ms,
                 request_body=body,
+                failover_details=failover,
             )
             return JSONResponse(
                 {
@@ -210,6 +228,8 @@ async def _stream_wrapper(
     """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
     buffer = b""
     usage: dict = {}
+    got_msg_start = False
+    got_msg_delta = False
 
     try:
         async for chunk in stream:
@@ -219,21 +239,25 @@ async def _stream_wrapper(
             if len(buffer) > 32768:
                 buffer = buffer[-16384:]
             # 从 message_start 提取 input_tokens / cache
-            m = _SSE_MSG_START_RE.search(buffer)
-            if m:
-                try:
-                    data = json.loads(m.group(1))
-                    usage.update(data.get("message", {}).get("usage", {}))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            if not got_msg_start:
+                m = _SSE_MSG_START_RE.search(buffer)
+                if m:
+                    try:
+                        data = json.loads(m.group(1))
+                        usage.update(data.get("message", {}).get("usage", {}))
+                        got_msg_start = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
             # 从 message_delta 提取 output_tokens
-            m = _SSE_MSG_DELTA_RE.search(buffer)
-            if m:
-                try:
-                    data = json.loads(m.group(1))
-                    usage.update(data.get("usage", {}))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            if not got_msg_delta:
+                m = _SSE_MSG_DELTA_RE.search(buffer)
+                if m:
+                    try:
+                        data = json.loads(m.group(1))
+                        usage.update(data.get("usage", {}))
+                        got_msg_delta = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
         # 流成功完成
         latency_ms = int((time.time() - start_time) * 1000)
@@ -251,9 +275,16 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            failover_details=outcome.get("_failures"),
         )
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
+        failover = None
+        if isinstance(e, AllProvidersFailedError):
+            failover = [
+                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                for err in e.errors
+            ]
         await store.record(
             virtual_model=virtual_model,
             status="error",
@@ -261,6 +292,7 @@ async def _stream_wrapper(
             error_message=str(e),
             latency_ms=latency_ms,
             request_body=request_body,
+            failover_details=failover,
         )
         error_body = json.dumps(
             {
