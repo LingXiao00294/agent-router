@@ -82,7 +82,7 @@ class Router:
             recovery_timeout=config.router.recovery_timeout,
         )
 
-    def _handle_provider_error(
+    async def _handle_provider_error(
         self,
         e: RetryableError | NonRetryableError,
         provider_cfg: ProviderConfig,
@@ -102,7 +102,7 @@ class Router:
         is_retryable = isinstance(e, RetryableError)
 
         if is_retryable:
-            self.circuit_breaker.record_failure(
+            await self.circuit_breaker.record_failure(
                 provider_cfg.name,
                 immediate=e.immediate_break,
                 failure_threshold=provider_cfg.failure_threshold,
@@ -155,12 +155,6 @@ class Router:
                     circuit_broken=e.immediate_break,
                 )
         else:
-            if outcome is not None:
-                outcome["provider_name"] = provider_cfg.name
-                outcome["provider_type"] = provider_cfg.type
-                outcome["provider_model"] = provider_cfg.model
-                outcome["provider_url"] = provider_cfg.base_url
-                outcome["attempt"] = attempt
             raise e
 
     async def route_non_stream(
@@ -171,7 +165,7 @@ class Router:
         outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
         """
         virtual_model = request_body.get("model", "")
-        providers = self._get_providers(virtual_model)
+        providers = await self._get_providers(virtual_model)
 
         request_id = str(uuid.uuid4())
         start_time = time.time()
@@ -204,7 +198,7 @@ class Router:
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
 
-                self.circuit_breaker.record_success(provider_cfg.name)
+                await self.circuit_breaker.record_success(provider_cfg.name)
 
                 logger.info(
                     "provider.success",
@@ -226,7 +220,7 @@ class Router:
                 return result
 
             except (RetryableError, NonRetryableError) as e:
-                self._handle_provider_error(
+                await self._handle_provider_error(
                     e, provider_cfg, request_id, attempt,
                     p_start, errors, outcome, providers, i,
                 )
@@ -251,7 +245,7 @@ class Router:
         outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
         """
         virtual_model = request_body.get("model", "")
-        providers = self._get_providers(virtual_model)
+        providers = await self._get_providers(virtual_model)
 
         request_id = str(uuid.uuid4())
         start_time = time.time()
@@ -283,16 +277,16 @@ class Router:
                 error_buffer = b""
                 async for chunk in provider.send_stream(request_body):
                     error_buffer += chunk
+                    # Check for error events before truncating buffer
+                    _check_stream_error(error_buffer)
                     # Limit error detection buffer, keeping recent data for SSE error events
                     if len(error_buffer) > 8192:
                         error_buffer = error_buffer[-4096:]
-                    # Check for error events before yielding to client
-                    _check_stream_error(error_buffer)
                     yield chunk
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
 
-                self.circuit_breaker.record_success(provider_cfg.name)
+                await self.circuit_breaker.record_success(provider_cfg.name)
 
                 logger.info(
                     "provider.success",
@@ -314,7 +308,7 @@ class Router:
                 return  # 流成功完成
 
             except (RetryableError, NonRetryableError) as e:
-                self._handle_provider_error(
+                await self._handle_provider_error(
                     e, provider_cfg, request_id, attempt,
                     p_start, errors, outcome, providers, i,
                 )
@@ -331,7 +325,7 @@ class Router:
         )
         raise AllProvidersFailedError(virtual_model, errors)
 
-    def _get_providers(self, virtual_model: str) -> list[ProviderConfig]:
+    async def _get_providers(self, virtual_model: str) -> list[ProviderConfig]:
         if virtual_model not in self.config.models:
             raise UnknownModelError(virtual_model, list(self.config.models.keys()))
 
@@ -340,11 +334,11 @@ class Router:
         skipped: list[dict] = []
 
         for p in all_providers:
-            if self.circuit_breaker.is_available(p.name, recovery_timeout=p.recovery_timeout):
+            if await self.circuit_breaker.is_available(p.name, recovery_timeout=p.recovery_timeout):
                 available.append(p)
             else:
                 skipped.append(
-                    {"provider": p.name, "model": p.model, "state": self.circuit_breaker.state(p.name, recovery_timeout=p.recovery_timeout).value}
+                    {"provider": p.name, "model": p.model, "state": (await self.circuit_breaker.state(p.name, recovery_timeout=p.recovery_timeout)).value}
                 )
 
         if skipped:

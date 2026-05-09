@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 from enum import Enum
 
@@ -40,11 +40,11 @@ class CircuitBreaker:
         self._failure_counts: dict[str, int] = {}
         self._states: dict[str, CircuitState] = {}
         self._last_failure_time: dict[str, float] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def state(self, provider: str, recovery_timeout: float | None = None) -> CircuitState:
+    async def state(self, provider: str, recovery_timeout: float | None = None) -> CircuitState:
         timeout = recovery_timeout if recovery_timeout is not None else self.recovery_timeout
-        with self._lock:
+        async with self._lock:
             current = self._states.get(provider, CircuitState.CLOSED)
             if current == CircuitState.OPEN:
                 elapsed = time.monotonic() - self._last_failure_time.get(provider, 0)
@@ -58,11 +58,11 @@ class CircuitBreaker:
                     return CircuitState.HALF_OPEN
             return current
 
-    def is_available(self, provider: str, recovery_timeout: float | None = None) -> bool:
-        return self.state(provider, recovery_timeout=recovery_timeout) != CircuitState.OPEN
+    async def is_available(self, provider: str, recovery_timeout: float | None = None) -> bool:
+        return await self.state(provider, recovery_timeout=recovery_timeout) != CircuitState.OPEN
 
-    def record_success(self, provider: str) -> None:
-        with self._lock:
+    async def record_success(self, provider: str) -> None:
+        async with self._lock:
             prev = self._states.get(provider, CircuitState.CLOSED)
             self._failure_counts.pop(provider, None)
             self._states[provider] = CircuitState.CLOSED
@@ -74,7 +74,7 @@ class CircuitBreaker:
                 msg="provider recovered, circuit breaker closed",
             )
 
-    def record_failure(
+    async def record_failure(
         self,
         provider: str,
         *,
@@ -82,7 +82,7 @@ class CircuitBreaker:
         failure_threshold: int | None = None,
     ) -> None:
         threshold = failure_threshold if failure_threshold is not None else self.failure_threshold
-        with self._lock:
+        async with self._lock:
             if immediate:
                 self._failure_counts[provider] = threshold
                 self._states[provider] = CircuitState.OPEN
@@ -119,15 +119,15 @@ class CircuitBreaker:
                     threshold=threshold,
                 )
 
-    def reset(self, provider: str) -> None:
-        with self._lock:
+    async def reset(self, provider: str) -> None:
+        async with self._lock:
             self._failure_counts.pop(provider, None)
             self._states.pop(provider, None)
             self._last_failure_time.pop(provider, None)
 
-    def get_all_states(self) -> dict[str, CircuitState]:
+    async def get_all_states(self) -> dict[str, CircuitState]:
         """Return current state of all known providers."""
-        with self._lock:
+        async with self._lock:
             return {
                 p: self._states.get(p, CircuitState.CLOSED)
                 for p in set(self._states) | set(self._failure_counts)

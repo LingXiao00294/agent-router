@@ -71,13 +71,13 @@ def create_app(
     @app.get("/api/circuit-breaker")
     async def get_circuit_breaker_states():
         """返回所有 provider 的熔断状态."""
-        states = router_engine.circuit_breaker.get_all_states()
+        states = await router_engine.circuit_breaker.get_all_states()
         return {name: state.value for name, state in states.items()}
 
     @app.post("/api/circuit-breaker/{provider}/reset")
     async def reset_circuit_breaker(provider: str):
         """重置指定 provider 的熔断状态."""
-        router_engine.circuit_breaker.reset(provider)
+        await router_engine.circuit_breaker.reset(provider)
         return {"status": "ok", "provider": provider}
 
     @app.get("/v1/models")

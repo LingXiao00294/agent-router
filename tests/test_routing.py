@@ -8,20 +8,20 @@ from agent_router.providers.base import NonRetryableError, RetryableError
 
 
 class TestRouterModelLookup:
-    def test_known_model(self, sample_config, http_client):
+    async def test_known_model(self, sample_config, http_client):
         router = Router(sample_config, http_client)
-        providers = router._get_providers("haiku-router")
+        providers = await router._get_providers("haiku-router")
         assert len(providers) == 2
         assert providers[0].model == "claude-haiku-4-5-20251001"
 
-    def test_unknown_model(self, sample_config, http_client):
+    async def test_unknown_model(self, sample_config, http_client):
         router = Router(sample_config, http_client)
         with pytest.raises(UnknownModelError) as exc:
-            router._get_providers("nonexistent-router")
+            await router._get_providers("nonexistent-router")
         assert "nonexistent-router" in str(exc.value)
         assert "haiku-router" in exc.value.known
 
-    def test_model_names(self, sample_config, http_client):
+    async def test_model_names(self, sample_config, http_client):
         router = Router(sample_config, http_client)
         names = router.model_names
         assert "haiku-router" in names

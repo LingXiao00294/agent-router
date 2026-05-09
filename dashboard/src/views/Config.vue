@@ -267,7 +267,7 @@ function removeRef(m: ModelEntry, idx: number) {
 // --- 拖拽排序 ---
 interface DragInfo { model: ModelEntry; idx: number }
 const dragInfo = ref<DragInfo | null>(null);
-let dragOverEl: HTMLElement | null = null;
+const dragOverEl = ref<HTMLElement | null>(null);
 
 function onDragStart(e: DragEvent, model: ModelEntry, idx: number) {
   dragInfo.value = { model, idx };
@@ -276,9 +276,9 @@ function onDragStart(e: DragEvent, model: ModelEntry, idx: number) {
 }
 function onDragOver(e: DragEvent) {
   e.dataTransfer!.dropEffect = "move";
-  dragOverEl?.classList.remove("drag-over");
-  dragOverEl = (e.target as HTMLElement)?.closest(".ref-row");
-  dragOverEl?.classList.add("drag-over");
+  dragOverEl.value?.classList.remove("drag-over");
+  dragOverEl.value = (e.target as HTMLElement)?.closest(".ref-row");
+  dragOverEl.value?.classList.add("drag-over");
 }
 function onDrop(_e: DragEvent, targetModel: ModelEntry, targetIdx: number) {
   if (!dragInfo.value || dragInfo.value.model !== targetModel) return;
@@ -289,9 +289,9 @@ function onDrop(_e: DragEvent, targetModel: ModelEntry, targetIdx: number) {
 }
 function onDragEnd(e: DragEvent) {
   (e.target as HTMLElement)?.classList.remove("dragging");
-  dragOverEl?.classList.remove("drag-over");
+  dragOverEl.value?.classList.remove("drag-over");
   dragInfo.value = null;
-  dragOverEl = null;
+  dragOverEl.value = null;
 }
 
 async function saveConfig() {
@@ -312,8 +312,8 @@ async function saveConfig() {
       api_key: p.api_key || "${PLACEHOLDER}",
       base_url: p.base_url,
       timeout_seconds: p.timeout_seconds,
-      failure_threshold: p.failure_threshold || null,
-      recovery_timeout: p.recovery_timeout || null,
+      failure_threshold: p.failure_threshold ?? null,
+      recovery_timeout: p.recovery_timeout ?? null,
     };
   }
 
