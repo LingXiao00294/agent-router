@@ -50,7 +50,7 @@
           </div>
           <div class="card-body">
             <label>类型 <select v-model="p.type" class="input"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
-            <label>API Key <input v-model="p.api_key" type="password" placeholder="sk-..." class="input" /></label>
+            <label>API Key <input v-model="p.api_key" type="password" :placeholder="p.has_key ? '(已配置，留空则保留)' : 'sk-...'" class="input" /></label>
             <label>Base URL <input v-model="p.base_url" placeholder="https://api.anthropic.com" class="input" /></label>
             <label>超时 <input v-model.number="p.timeout_seconds" type="number" class="input short" /> 秒</label>
           </div>
@@ -120,6 +120,7 @@ interface ProviderEntry {
   api_key: string;
   base_url: string;
   timeout_seconds: number;
+  has_key?: boolean;
 }
 
 interface ModelRef {
@@ -166,6 +167,7 @@ async function loadConfig() {
     api_key: "",
     base_url: p.base_url || "",
     timeout_seconds: p.timeout_seconds || 120,
+    has_key: !!p.has_key,
   }));
 
   modelEntries.value = Object.entries(models).map(([name, refs]: [string, any]) => ({
@@ -181,7 +183,7 @@ async function loadConfig() {
 }
 
 function addProvider() {
-  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120 });
+  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120, has_key: false });
 }
 function removeProvider(idx: number) {
   const name = providerEntries.value[idx]?.name;
@@ -209,11 +211,11 @@ function removeRef(m: ModelEntry, idx: number) {
 
 // --- 拖拽排序 ---
 interface DragInfo { model: ModelEntry; idx: number }
-let dragInfo: DragInfo | null = null;
+const dragInfo = ref<DragInfo | null>(null);
 let dragOverEl: HTMLElement | null = null;
 
 function onDragStart(e: DragEvent, model: ModelEntry, idx: number) {
-  dragInfo = { model, idx };
+  dragInfo.value = { model, idx };
   (e.target as HTMLElement)?.classList.add("dragging");
   e.dataTransfer!.effectAllowed = "move";
 }
@@ -224,16 +226,16 @@ function onDragOver(e: DragEvent) {
   dragOverEl?.classList.add("drag-over");
 }
 function onDrop(_e: DragEvent, targetModel: ModelEntry, targetIdx: number) {
-  if (!dragInfo || dragInfo.model !== targetModel) return;
+  if (!dragInfo.value || dragInfo.value.model !== targetModel) return;
   const refs = targetModel.refs;
-  const [item] = refs.splice(dragInfo.idx, 1);
-  const actualTarget = dragInfo.idx < targetIdx ? targetIdx - 1 : targetIdx;
+  const [item] = refs.splice(dragInfo.value.idx, 1);
+  const actualTarget = dragInfo.value.idx < targetIdx ? targetIdx - 1 : targetIdx;
   refs.splice(actualTarget, 0, item);
 }
 function onDragEnd(e: DragEvent) {
   (e.target as HTMLElement)?.classList.remove("dragging");
   dragOverEl?.classList.remove("drag-over");
-  dragInfo = null;
+  dragInfo.value = null;
   dragOverEl = null;
 }
 

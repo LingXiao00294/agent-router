@@ -20,8 +20,9 @@
               {{ call.status }}
             </span>
           </div>
+        </div>
 
-        <div v-if="failoverList.length" class="section">
+        <div v-if="failoverList.length" class="section failover-section">
           <h4>故障转移链路</h4>
           <div class="failover-chain">
             <div v-for="(fo, i) in failoverList" :key="i" class="failover-entry">
@@ -40,6 +41,8 @@
             </div>
           </div>
         </div>
+
+        <div class="detail-grid">
           <div class="kv"><span class="key">延迟</span><span class="value">{{ call.latency_ms }}ms</span></div>
           <div class="kv"><span class="key">输入 Token</span><span class="value">{{ call.input_tokens ?? "-" }}</span></div>
           <div class="kv"><span class="key">输出 Token</span><span class="value">{{ call.output_tokens ?? "-" }}</span></div>

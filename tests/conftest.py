@@ -44,5 +44,6 @@ def sample_config() -> AppConfig:
 
 
 @pytest.fixture
-def http_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient()
+async def http_client():
+    async with httpx.AsyncClient() as client:
+        yield client

@@ -128,6 +128,7 @@ def create_config_router(config_path: str) -> APIRouter:
         safe = deepcopy(raw)
         for pname, pdata in safe.get("providers", {}).items():
             if "api_key" in pdata:
+                pdata["has_key"] = bool(pdata["api_key"])
                 pdata["api_key"] = _mask_key(pdata["api_key"])
         return safe
 

@@ -216,6 +216,8 @@ async def _stream_wrapper(
     """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
     buffer = b""
     usage: dict = {}
+    got_msg_start = False
+    got_msg_delta = False
 
     try:
         async for chunk in stream:
@@ -225,21 +227,25 @@ async def _stream_wrapper(
             if len(buffer) > 32768:
                 buffer = buffer[-16384:]
             # 从 message_start 提取 input_tokens / cache
-            m = _SSE_MSG_START_RE.search(buffer)
-            if m:
-                try:
-                    data = json.loads(m.group(1))
-                    usage.update(data.get("message", {}).get("usage", {}))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            if not got_msg_start:
+                m = _SSE_MSG_START_RE.search(buffer)
+                if m:
+                    try:
+                        data = json.loads(m.group(1))
+                        usage.update(data.get("message", {}).get("usage", {}))
+                        got_msg_start = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
             # 从 message_delta 提取 output_tokens
-            m = _SSE_MSG_DELTA_RE.search(buffer)
-            if m:
-                try:
-                    data = json.loads(m.group(1))
-                    usage.update(data.get("usage", {}))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            if not got_msg_delta:
+                m = _SSE_MSG_DELTA_RE.search(buffer)
+                if m:
+                    try:
+                        data = json.loads(m.group(1))
+                        usage.update(data.get("usage", {}))
+                        got_msg_delta = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
         # 流成功完成
         latency_ms = int((time.time() - start_time) * 1000)

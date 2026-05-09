@@ -211,8 +211,6 @@ class Router:
                     retry=False,
                     provider_latency_ms=round(p_latency),
                 )
-                # 不重试错误立即返回
-                total_latency = (time.time() - start_time) * 1000
                 raise
 
         # 全部失败
