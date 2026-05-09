@@ -65,9 +65,11 @@
           </div>
           <div class="card-body">
             <label>类型 <select v-model="p.type" class="input"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
-            <label>API Key <input v-model="p.api_key" type="password" :placeholder="p.has_key ? '(已配置，留空则保留)' : 'sk-...'" class="input" /></label>
+            <label>API Key <input v-model="p.api_key" type="password" :placeholder="p.has_key ? '(留空则保留当前 key)' : 'sk-...'" class="input" /></label>
             <label>Base URL <input v-model="p.base_url" placeholder="https://api.anthropic.com" class="input" /></label>
             <label>超时 <input v-model.number="p.timeout_seconds" type="number" class="input short" /> 秒</label>
+            <label>熔断阈值 <input v-model.number="p.failure_threshold" type="number" class="input short" placeholder="默认" /> 次</label>
+            <label>恢复超时 <input v-model.number="p.recovery_timeout" type="number" class="input short" placeholder="默认" /> 秒</label>
           </div>
         </div>
       </section>
@@ -136,6 +138,8 @@ interface ProviderEntry {
   base_url: string;
   timeout_seconds: number;
   has_key?: boolean;
+  failure_threshold?: number | null;
+  recovery_timeout?: number | null;
 }
 
 interface ModelRef {
@@ -213,10 +217,12 @@ async function loadConfig() {
   providerEntries.value = Object.entries(providers.providers || {}).map(([name, p]: [string, any]) => ({
     name,
     type: p.type || "anthropic",
-    api_key: "",
+    api_key: p.api_key || "",
     base_url: p.base_url || "",
     timeout_seconds: p.timeout_seconds || 120,
     has_key: !!p.has_key,
+    failure_threshold: p.failure_threshold ?? null,
+    recovery_timeout: p.recovery_timeout ?? null,
   }));
 
   modelEntries.value = Object.entries(models).map(([name, refs]: [string, any]) => ({
@@ -232,7 +238,7 @@ async function loadConfig() {
 }
 
 function addProvider() {
-  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120, has_key: false });
+  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120, has_key: false, failure_threshold: null, recovery_timeout: null });
 }
 function removeProvider(idx: number) {
   const name = providerEntries.value[idx]?.name;
@@ -306,6 +312,8 @@ async function saveConfig() {
       api_key: p.api_key || "${PLACEHOLDER}",
       base_url: p.base_url,
       timeout_seconds: p.timeout_seconds,
+      failure_threshold: p.failure_threshold || null,
+      recovery_timeout: p.recovery_timeout || null,
     };
   }
 

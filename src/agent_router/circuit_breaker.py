@@ -42,23 +42,24 @@ class CircuitBreaker:
         self._last_failure_time: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    def state(self, provider: str) -> CircuitState:
+    def state(self, provider: str, recovery_timeout: float | None = None) -> CircuitState:
+        timeout = recovery_timeout if recovery_timeout is not None else self.recovery_timeout
         with self._lock:
             current = self._states.get(provider, CircuitState.CLOSED)
             if current == CircuitState.OPEN:
                 elapsed = time.monotonic() - self._last_failure_time.get(provider, 0)
-                if elapsed >= self.recovery_timeout:
+                if elapsed >= timeout:
                     self._states[provider] = CircuitState.HALF_OPEN
                     logger.info(
                         "circuit.half_open",
                         provider=provider,
-                        recovery_timeout=self.recovery_timeout,
+                        recovery_timeout=timeout,
                     )
                     return CircuitState.HALF_OPEN
             return current
 
-    def is_available(self, provider: str) -> bool:
-        return self.state(provider) != CircuitState.OPEN
+    def is_available(self, provider: str, recovery_timeout: float | None = None) -> bool:
+        return self.state(provider, recovery_timeout=recovery_timeout) != CircuitState.OPEN
 
     def record_success(self, provider: str) -> None:
         with self._lock:
@@ -73,10 +74,17 @@ class CircuitBreaker:
                 msg="provider recovered, circuit breaker closed",
             )
 
-    def record_failure(self, provider: str, *, immediate: bool = False) -> None:
+    def record_failure(
+        self,
+        provider: str,
+        *,
+        immediate: bool = False,
+        failure_threshold: int | None = None,
+    ) -> None:
+        threshold = failure_threshold if failure_threshold is not None else self.failure_threshold
         with self._lock:
             if immediate:
-                self._failure_counts[provider] = self.failure_threshold
+                self._failure_counts[provider] = threshold
                 self._states[provider] = CircuitState.OPEN
                 self._last_failure_time[provider] = time.monotonic()
                 logger.warning(
@@ -91,7 +99,7 @@ class CircuitBreaker:
             count = self._failure_counts.get(provider, 0) + 1
             self._failure_counts[provider] = count
 
-            if count >= self.failure_threshold:
+            if count >= threshold:
                 self._states[provider] = CircuitState.OPEN
                 self._last_failure_time[provider] = time.monotonic()
                 logger.warning(
@@ -99,16 +107,16 @@ class CircuitBreaker:
                     provider=provider,
                     reason="consecutive_failures",
                     failures=count,
-                    threshold=self.failure_threshold,
+                    threshold=threshold,
                     recovery_timeout=self.recovery_timeout,
-                    msg=f"consecutive failures reached threshold ({count}/{self.failure_threshold})",
+                    msg=f"consecutive failures reached threshold ({count}/{threshold})",
                 )
             else:
                 logger.debug(
                     "circuit.failure_counted",
                     provider=provider,
                     consecutive_failures=count,
-                    threshold=self.failure_threshold,
+                    threshold=threshold,
                 )
 
     def reset(self, provider: str) -> None:

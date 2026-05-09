@@ -88,6 +88,50 @@ class TestCircuitBreakerUnit:
         assert cb.state("p1") == CircuitState.CLOSED
         assert cb.is_available("p1")
 
+    def test_per_provider_failure_threshold(self):
+        """Per-provider threshold overrides global default."""
+        cb = CircuitBreaker(failure_threshold=5)
+        # p1 uses per-provider threshold of 2
+        cb.record_failure("p1", failure_threshold=2)
+        assert cb.state("p1") == CircuitState.CLOSED
+        cb.record_failure("p1", failure_threshold=2)
+        assert cb.state("p1") == CircuitState.OPEN
+        # p2 still uses global threshold of 5
+        cb.record_failure("p2")
+        cb.record_failure("p2")
+        assert cb.state("p2") == CircuitState.CLOSED
+
+    def test_per_provider_recovery_timeout(self):
+        """Per-provider recovery_timeout overrides global default."""
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=10.0)
+        cb.record_failure("p1")
+        assert cb.state("p1") == CircuitState.OPEN
+        # Global timeout (10s) hasn't passed
+        assert cb.state("p1") == CircuitState.OPEN
+        # Per-provider timeout (0.05s) should allow transition
+        time.sleep(0.06)
+        assert cb.state("p1", recovery_timeout=0.05) == CircuitState.HALF_OPEN
+
+    def test_per_provider_recovery_timeout_shorter_than_global(self):
+        """Shorter per-provider timeout triggers transition before global."""
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=10.0)
+        cb.record_failure("p1")
+        cb.record_failure("p2")
+        time.sleep(0.06)
+        # p1 uses short per-provider timeout → HALF_OPEN
+        assert cb.state("p1", recovery_timeout=0.05) == CircuitState.HALF_OPEN
+        # p2 uses global timeout (10s) → still OPEN
+        assert cb.state("p2") == CircuitState.OPEN
+
+    def test_per_provider_is_available(self):
+        """is_available respects per-provider recovery_timeout."""
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=10.0)
+        cb.record_failure("p1")
+        assert not cb.is_available("p1")
+        time.sleep(0.06)
+        assert not cb.is_available("p1")  # global timeout
+        assert cb.is_available("p1", recovery_timeout=0.05)  # per-provider timeout
+
 
 class TestCircuitBreakerRouterIntegration:
     """Test that circuit breaker filters providers in Router._get_providers."""

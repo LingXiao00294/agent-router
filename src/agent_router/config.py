@@ -16,6 +16,8 @@ class ProviderDef(BaseModel):
     api_key: str
     base_url: str
     timeout_seconds: float = 120.0
+    failure_threshold: int | None = None
+    recovery_timeout: float | None = None
 
     @field_validator("api_key")
     @classmethod
@@ -43,6 +45,8 @@ class ProviderConfig(BaseModel):
     base_url: str
     priority: int
     timeout_seconds: float = 120.0
+    failure_threshold: int | None = None
+    recovery_timeout: float | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -147,6 +151,8 @@ def load_config(config_path: str | Path) -> AppConfig:
                         base_url=pdef.base_url,
                         priority=ref["priority"],
                         timeout_seconds=pdef.timeout_seconds,
+                        failure_threshold=pdef.failure_threshold,
+                        recovery_timeout=pdef.recovery_timeout,
                     )
                 )
             except KeyError as e:
