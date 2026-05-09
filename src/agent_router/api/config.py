@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -126,7 +127,10 @@ def _write_toml(config_path: str, data: dict) -> None:
     tmp_path.replace(config_path)
 
 
-def create_config_router(config_path: str) -> APIRouter:
+def create_config_router(
+    config_path: str,
+    reload_config_fn: Callable[[], Awaitable[None]] | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["config"])
 
     @router.get("/api/config")
@@ -198,6 +202,14 @@ def create_config_router(config_path: str) -> APIRouter:
             raise
         except Exception as e:
             raise HTTPException(500, f"写入配置失败: {e}")
-        return {"status": "ok", "message": "配置已更新，请重启 router 生效"}
+
+        # 热重载
+        if reload_config_fn is not None:
+            try:
+                await reload_config_fn()
+            except Exception as e:
+                raise HTTPException(500, f"配置已写入但热重载失败: {e}")
+
+        return {"status": "ok", "message": "配置已更新并热重载"}
 
     return router
