@@ -105,7 +105,6 @@ class Router:
         )
 
         for i, provider_cfg in enumerate(providers):
-            provider = _create_provider(provider_cfg, self.http)
             attempt = i + 1
 
             logger.info(
@@ -118,6 +117,7 @@ class Router:
             )
 
             try:
+                provider = _create_provider(provider_cfg, self.http)
                 p_start = time.time()
                 result = await provider.send(request_body)
                 p_latency = (time.time() - p_start) * 1000
@@ -199,6 +199,7 @@ class Router:
                         "priority": provider_cfg.priority,
                         "error": str(e),
                         "retryable": False,
+                        "latency_ms": round(p_latency),
                     }
                 )
                 logger.error(
@@ -249,7 +250,6 @@ class Router:
         )
 
         for i, provider_cfg in enumerate(providers):
-            provider = _create_provider(provider_cfg, self.http)
             attempt = i + 1
 
             logger.info(
@@ -262,15 +262,16 @@ class Router:
             )
 
             try:
+                provider = _create_provider(provider_cfg, self.http)
                 p_start = time.time()
-                stream_buffer = b""
+                error_buffer = b""
                 async for chunk in provider.send_stream(request_body):
-                    stream_buffer += chunk
-                    # Limit buffer size to avoid memory issues
-                    if len(stream_buffer) > 32768:
-                        stream_buffer = stream_buffer[-16384:]
+                    error_buffer += chunk
+                    # Limit error detection buffer, keeping recent data for SSE error events
+                    if len(error_buffer) > 8192:
+                        error_buffer = error_buffer[-4096:]
                     # Check for error events before yielding to client
-                    _check_stream_error(stream_buffer)
+                    _check_stream_error(error_buffer)
                     yield chunk
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
@@ -351,6 +352,7 @@ class Router:
                         "priority": provider_cfg.priority,
                         "error": str(e),
                         "retryable": False,
+                        "latency_ms": round(p_latency),
                     }
                 )
                 logger.error(
