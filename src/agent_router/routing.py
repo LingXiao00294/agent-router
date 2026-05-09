@@ -117,8 +117,8 @@ class Router:
             )
 
             try:
-                provider = _create_provider(provider_cfg, self.http)
                 p_start = time.time()
+                provider = _create_provider(provider_cfg, self.http)
                 result = await provider.send(request_body)
                 p_latency = (time.time() - p_start) * 1000
                 total_latency = (time.time() - start_time) * 1000
@@ -260,8 +260,8 @@ class Router:
             )
 
             try:
-                provider = _create_provider(provider_cfg, self.http)
                 p_start = time.time()
+                provider = _create_provider(provider_cfg, self.http)
                 error_buffer = b""
                 async for chunk in provider.send_stream(request_body):
                     error_buffer += chunk
@@ -362,7 +362,6 @@ class Router:
                     retry=False,
                     provider_latency_ms=round(p_latency),
                 )
-                total_latency = (time.time() - start_time) * 1000
                 if outcome is not None:
                     outcome["provider_name"] = provider_cfg.name
                     outcome["provider_type"] = provider_cfg.type
