@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from enum import Enum
 
@@ -39,28 +40,31 @@ class CircuitBreaker:
         self._failure_counts: dict[str, int] = {}
         self._states: dict[str, CircuitState] = {}
         self._last_failure_time: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def state(self, provider: str) -> CircuitState:
-        current = self._states.get(provider, CircuitState.CLOSED)
-        if current == CircuitState.OPEN:
-            elapsed = time.monotonic() - self._last_failure_time.get(provider, 0)
-            if elapsed >= self.recovery_timeout:
-                self._states[provider] = CircuitState.HALF_OPEN
-                logger.info(
-                    "circuit.half_open",
-                    provider=provider,
-                    recovery_timeout=self.recovery_timeout,
-                )
-                return CircuitState.HALF_OPEN
-        return current
+        with self._lock:
+            current = self._states.get(provider, CircuitState.CLOSED)
+            if current == CircuitState.OPEN:
+                elapsed = time.monotonic() - self._last_failure_time.get(provider, 0)
+                if elapsed >= self.recovery_timeout:
+                    self._states[provider] = CircuitState.HALF_OPEN
+                    logger.info(
+                        "circuit.half_open",
+                        provider=provider,
+                        recovery_timeout=self.recovery_timeout,
+                    )
+                    return CircuitState.HALF_OPEN
+            return current
 
     def is_available(self, provider: str) -> bool:
         return self.state(provider) != CircuitState.OPEN
 
     def record_success(self, provider: str) -> None:
-        prev = self._states.get(provider, CircuitState.CLOSED)
-        self._failure_counts.pop(provider, None)
-        self._states[provider] = CircuitState.CLOSED
+        with self._lock:
+            prev = self._states.get(provider, CircuitState.CLOSED)
+            self._failure_counts.pop(provider, None)
+            self._states[provider] = CircuitState.CLOSED
         if prev != CircuitState.CLOSED:
             logger.info(
                 "circuit.closed",
@@ -70,43 +74,53 @@ class CircuitBreaker:
             )
 
     def record_failure(self, provider: str, *, immediate: bool = False) -> None:
-        if immediate:
-            self._failure_counts[provider] = self.failure_threshold
-            self._states[provider] = CircuitState.OPEN
-            self._last_failure_time[provider] = time.monotonic()
-            logger.warning(
-                "circuit.opened",
-                provider=provider,
-                reason="auth_error",
-                msg="auth/permission error, circuit breaker immediately opened",
-                recovery_timeout=self.recovery_timeout,
-            )
-            return
+        with self._lock:
+            if immediate:
+                self._failure_counts[provider] = self.failure_threshold
+                self._states[provider] = CircuitState.OPEN
+                self._last_failure_time[provider] = time.monotonic()
+                logger.warning(
+                    "circuit.opened",
+                    provider=provider,
+                    reason="auth_error",
+                    msg="auth/permission error, circuit breaker immediately opened",
+                    recovery_timeout=self.recovery_timeout,
+                )
+                return
 
-        count = self._failure_counts.get(provider, 0) + 1
-        self._failure_counts[provider] = count
+            count = self._failure_counts.get(provider, 0) + 1
+            self._failure_counts[provider] = count
 
-        if count >= self.failure_threshold:
-            self._states[provider] = CircuitState.OPEN
-            self._last_failure_time[provider] = time.monotonic()
-            logger.warning(
-                "circuit.opened",
-                provider=provider,
-                reason="consecutive_failures",
-                failures=count,
-                threshold=self.failure_threshold,
-                recovery_timeout=self.recovery_timeout,
-                msg=f"consecutive failures reached threshold ({count}/{self.failure_threshold})",
-            )
-        else:
-            logger.debug(
-                "circuit.failure_counted",
-                provider=provider,
-                consecutive_failures=count,
-                threshold=self.failure_threshold,
-            )
+            if count >= self.failure_threshold:
+                self._states[provider] = CircuitState.OPEN
+                self._last_failure_time[provider] = time.monotonic()
+                logger.warning(
+                    "circuit.opened",
+                    provider=provider,
+                    reason="consecutive_failures",
+                    failures=count,
+                    threshold=self.failure_threshold,
+                    recovery_timeout=self.recovery_timeout,
+                    msg=f"consecutive failures reached threshold ({count}/{self.failure_threshold})",
+                )
+            else:
+                logger.debug(
+                    "circuit.failure_counted",
+                    provider=provider,
+                    consecutive_failures=count,
+                    threshold=self.failure_threshold,
+                )
 
     def reset(self, provider: str) -> None:
-        self._failure_counts.pop(provider, None)
-        self._states.pop(provider, None)
-        self._last_failure_time.pop(provider, None)
+        with self._lock:
+            self._failure_counts.pop(provider, None)
+            self._states.pop(provider, None)
+            self._last_failure_time.pop(provider, None)
+
+    def get_all_states(self) -> dict[str, CircuitState]:
+        """Return current state of all known providers."""
+        with self._lock:
+            return {
+                p: self._states.get(p, CircuitState.CLOSED)
+                for p in set(self._states) | set(self._failure_counts)
+            }

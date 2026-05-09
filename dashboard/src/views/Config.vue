@@ -36,6 +36,21 @@
         </div>
       </section>
 
+      <!-- Circuit Breaker -->
+      <section class="section" v-if="Object.keys(circuitStates).length > 0">
+        <div class="section-header">
+          <h3>熔断状态</h3>
+          <button class="add-btn" @click="loadCircuitStates">刷新</button>
+        </div>
+        <div class="server-card">
+          <div v-for="(state, name) in circuitStates" :key="name" class="cb-row">
+            <span class="cb-name">{{ name }}</span>
+            <span class="cb-state" :class="stateClass[state] || 'state-ok'">{{ stateLabel[state] || state }}</span>
+            <button v-if="state !== 'closed'" class="del-btn small" @click="handleResetProvider(name)">重置</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Providers -->
       <section class="section">
         <div class="section-header">
@@ -103,7 +118,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchConfig, fetchConfigModels, updateConfig } from "../api";
+import { fetchConfig, fetchConfigModels, updateConfig, fetchCircuitBreakerStates, resetCircuitBreaker } from "../api";
 
 const loading = ref(true);
 const saving = ref(false);
@@ -136,8 +151,41 @@ interface ModelEntry {
 
 const providerEntries = ref<ProviderEntry[]>([]);
 const modelEntries = ref<ModelEntry[]>([]);
+const circuitStates = ref<Record<string, string>>({});
 
 const providerNames = computed(() => providerEntries.value.map((p) => p.name).filter(Boolean));
+
+async function loadCircuitStates() {
+  try {
+    circuitStates.value = await fetchCircuitBreakerStates();
+  } catch {
+    circuitStates.value = {};
+  }
+}
+
+async function handleResetProvider(name: string) {
+  try {
+    await resetCircuitBreaker(name);
+    await loadCircuitStates();
+    message.value = `已重置 ${name} 的熔断状态`;
+    messageType.value = "success";
+  } catch (e: any) {
+    message.value = e.message;
+    messageType.value = "error";
+  }
+}
+
+const stateLabel: Record<string, string> = {
+  closed: "正常",
+  open: "已熔断",
+  half_open: "半开",
+};
+
+const stateClass: Record<string, string> = {
+  closed: "state-ok",
+  open: "state-error",
+  half_open: "state-warn",
+};
 
 async function loadConfig() {
   loading.value = true;
@@ -145,6 +193,7 @@ async function loadConfig() {
     fetchConfig(),
     fetchConfigModels(),
   ]);
+  loadCircuitStates();
 
   if (providers.server) {
     serverConfig.value = {
@@ -360,6 +409,17 @@ onMounted(loadConfig);
   min-width: 22px; text-align: center; border-radius: 4px; padding: 2px 4px;
 }
 .flex-1 { flex: 1; }
+
+.cb-row {
+  display: flex; align-items: center; gap: 12px; padding: 6px 0;
+}
+.cb-name { font-size: 13px; min-width: 120px; }
+.cb-state {
+  font-size: 12px; padding: 2px 8px; border-radius: 4px;
+}
+.state-ok { background: #a6e3a122; color: #a6e3a1; }
+.state-warn { background: #f9e2af22; color: #f9e2af; }
+.state-error { background: #f38ba822; color: #f38ba8; }
 
 .toast {
   position: fixed; bottom: 24px; right: 24px;

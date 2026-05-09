@@ -58,11 +58,11 @@ def _check_stream_error(buffer: bytes) -> None:
             )
         if error_type in _RETRYABLE_ERROR_TYPES:
             raise RetryableError(f"Stream error ({error_type}): {error_message}")
-        # Default to retryable for unknown error types in stream
-        raise RetryableError(f"Stream error ({error_type}): {error_message}")
+        # Unknown error types are non-retryable (don't blindly failover)
+        raise NonRetryableError(f"Stream error ({error_type}): {error_message}")
     except (json.JSONDecodeError, KeyError, TypeError):
-        # If we can't parse the error, still raise as retryable
-        raise RetryableError(f"Stream error: {m.group(1).decode(errors='replace')[:500]}")
+        # Malformed error event — non-retryable since we can't identify the type
+        raise NonRetryableError(f"Stream error: {m.group(1).decode(errors='replace')[:500]}")
 
 
 def _create_provider(config: ProviderConfig, http_client) -> BaseProvider:
