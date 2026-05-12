@@ -34,6 +34,7 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 - `config.toml` 定义 `[server]`、`[providers.*]`、`[[models.*]]`
 - `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开
 - 虚拟模型 → 按 priority 排序的 `list[ProviderConfig]`
+- `[[models.*]]` 支持可选的费用字段: `cost_input`、`cost_output`、`cost_cache_read`、`cost_cache_write`（单位: $/M tokens）
 - `.env` 和 `config.toml` 已在 `.gitignore` 中，不会提交
 
 ### 路由层 (`routing.py`)
@@ -64,6 +65,7 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 
 - FastAPI 应用，lifespan 中初始化 CallStore 和 httpx 客户端
 - 流式响应包装器 `_stream_wrapper` 从 SSE 流中正则提取 usage token 信息后写入数据库
+- `_calculate_cost`: 根据 token 用量和模型费率配置自动计算 `cost_usd`
 - Dashboard 静态文件挂载在 `/assets`，SPA fallback 路由放在最后
 - 错误处理: UnknownModelError → 400，AllProvidersFailedError → 502
 
@@ -71,6 +73,7 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 
 - aiosqlite 单文件数据库 `calls.db`
 - `CallStore` 提供 `record()`、`list_calls()`、`summary()`、`by_model()`、`by_provider()`、`daily_trend()` 等方法
+- 统计查询包含 cache token 字段: `cache_read_tokens`、`cache_write_tokens`
 - `_estimate_request_tokens`: 通过字符数粗略估算请求 token 数
 
 ### 监控 (`monitoring.py`)
@@ -88,7 +91,7 @@ cd dashboard && npm run build          # 生产构建 → dashboard/dist/
 ### Dashboard
 
 - Vue 3 + Vite + TypeScript + ECharts + Vue Router
-- 页面: Dashboard（统计卡片、模型图表、调用表格、趋势图）、Config（配置管理）
+- 页面: Dashboard（统计卡片含 cache 统计、模型图表含 4 层 token 堆叠、调用表格、趋势图）、Config（配置管理含模型费用配置）
 - 开发时 Vite dev server 将 `/api`、`/health`、`/v1` 代理到后端
 
 ## 测试

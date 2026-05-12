@@ -170,6 +170,10 @@ def create_config_router(
                     "provider": r["provider"],
                     "model": r["model"],
                     "priority": r["priority"],
+                    "cost_input": r.get("cost_input"),
+                    "cost_output": r.get("cost_output"),
+                    "cost_cache_read": r.get("cost_cache_read"),
+                    "cost_cache_write": r.get("cost_cache_write"),
                 }
                 for r in sorted(refs, key=lambda r: r.get("priority", 99))
             ]

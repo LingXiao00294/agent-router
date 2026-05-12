@@ -107,7 +107,15 @@
                 <option v-for="pn in providerNames" :key="pn" :value="pn">{{ pn }}</option>
               </select>
               <input v-model="ref.model" placeholder="真实模型名" class="input flex-1" />
+              <button class="cost-toggle-btn" :class="{ active: ref.showCost }" @click="ref.showCost = !ref.showCost" title="费用配置">$/M</button>
               <button class="del-btn small" @click="removeRef(m, ri)">×</button>
+            </div>
+            <div v-for="(ref, ri) in m.refs.filter(r => r.showCost)" :key="'cost-' + ri" class="cost-row">
+              <span class="cost-label">{{ ref.model || '模型' }} 费用 ($/M tokens)</span>
+              <label>输入 <input v-model.number="ref.cost_input" type="number" step="0.01" class="input short" placeholder="可选" /></label>
+              <label>输出 <input v-model.number="ref.cost_output" type="number" step="0.01" class="input short" placeholder="可选" /></label>
+              <label>Cache读 <input v-model.number="ref.cost_cache_read" type="number" step="0.01" class="input short" placeholder="可选" /></label>
+              <label>Cache写 <input v-model.number="ref.cost_cache_write" type="number" step="0.01" class="input short" placeholder="可选" /></label>
             </div>
           </div>
         </div>
@@ -146,6 +154,11 @@ interface ModelRef {
   provider: string;
   model: string;
   priority: number;  // 自动按顺序生成，不暴露给用户
+  cost_input: number | null;
+  cost_output: number | null;
+  cost_cache_read: number | null;
+  cost_cache_write: number | null;
+  showCost: boolean;  // 是否展开费用配置
 }
 
 interface ModelEntry {
@@ -231,6 +244,11 @@ async function loadConfig() {
       provider: r.provider || "",
       model: r.model || "",
       priority: r.priority || 99,
+      cost_input: r.cost_input ?? null,
+      cost_output: r.cost_output ?? null,
+      cost_cache_read: r.cost_cache_read ?? null,
+      cost_cache_write: r.cost_cache_write ?? null,
+      showCost: !!(r.cost_input || r.cost_output || r.cost_cache_read || r.cost_cache_write),
     })),
   }));
 
@@ -258,7 +276,7 @@ function removeModel(idx: number) {
   modelEntries.value.splice(idx, 1);
 }
 function addRef(m: ModelEntry) {
-  m.refs.push({ provider: "", model: "", priority: m.refs.length + 1 });
+  m.refs.push({ provider: "", model: "", priority: m.refs.length + 1, cost_input: null, cost_output: null, cost_cache_read: null, cost_cache_write: null, showCost: false });
 }
 function removeRef(m: ModelEntry, idx: number) {
   m.refs.splice(idx, 1);
@@ -325,6 +343,10 @@ async function saveConfig() {
         provider: r.provider,
         model: r.model,
         priority: i + 1,
+        cost_input: r.cost_input ?? null,
+        cost_output: r.cost_output ?? null,
+        cost_cache_read: r.cost_cache_read ?? null,
+        cost_cache_write: r.cost_cache_write ?? null,
       }));
   }
 
@@ -416,6 +438,20 @@ onMounted(loadConfig);
   background: #313244; color: #a6adc8; font-size: 11px;
   min-width: 22px; text-align: center; border-radius: 4px; padding: 2px 4px;
 }
+.cost-toggle-btn {
+  background: #313244; color: #a6adc8; border: 1px solid #45475a;
+  padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  transition: all 0.15s;
+}
+.cost-toggle-btn:hover { background: #45475a; color: #f9e2af; }
+.cost-toggle-btn.active { background: #45475a; color: #f9e2af; border-color: #f9e2af; }
+.cost-row {
+  display: flex; gap: 10px; align-items: center;
+  padding: 6px 8px 6px 32px; margin-bottom: 4px;
+  background: #181825; border-radius: 4px; font-size: 12px;
+}
+.cost-label { color: #6c7086; font-size: 11px; min-width: 100px; }
+.cost-row label { display: flex; align-items: center; gap: 4px; color: #a6adc8; font-size: 11px; }
 .flex-1 { flex: 1; }
 
 .cb-row {

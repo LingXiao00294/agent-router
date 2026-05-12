@@ -93,6 +93,20 @@ async function load() {
           data: data.map((d: any) => d.total_output_tokens || 0),
           itemStyle: { color: "#a6e3a1" },
         },
+        {
+          name: "Cache 读取",
+          type: "bar",
+          stack: "tokens",
+          data: data.map((d: any) => d.total_cache_read || 0),
+          itemStyle: { color: "#f9e2af" },
+        },
+        {
+          name: "Cache 写入",
+          type: "bar",
+          stack: "tokens",
+          data: data.map((d: any) => d.total_cache_write || 0),
+          itemStyle: { color: "#cba6f7" },
+        },
       ],
     });
   }

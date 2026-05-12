@@ -21,6 +21,27 @@ from agent_router.routing import AllProvidersFailedError, Router, UnknownModelEr
 
 logger = structlog.get_logger(__name__)
 
+
+def _calculate_cost(usage: dict, outcome: dict) -> float | None:
+    """根据 token 用量和费率计算费用 (USD). 费率单位: $/M tokens."""
+    cost_input = outcome.get("cost_input")
+    cost_output = outcome.get("cost_output")
+    cost_cache_read = outcome.get("cost_cache_read")
+    cost_cache_write = outcome.get("cost_cache_write")
+    if cost_input is None and cost_output is None:
+        return None
+    total = 0.0
+    if cost_input is not None:
+        total += (usage.get("input_tokens") or 0) * cost_input / 1_000_000
+    if cost_output is not None:
+        total += (usage.get("output_tokens") or 0) * cost_output / 1_000_000
+    if cost_cache_read is not None:
+        total += (usage.get("cache_read_input_tokens") or 0) * cost_cache_read / 1_000_000
+    if cost_cache_write is not None:
+        total += (usage.get("cache_creation_input_tokens") or 0) * cost_cache_write / 1_000_000
+    return round(total, 6) if total > 0 else None
+
+
 # 从 SSE 流中提取 usage 的正则 (message_start 有 input_tokens, message_delta 有 output_tokens)
 _SSE_MSG_START_RE = re.compile(
     rb"event:\s*message_start\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
@@ -148,6 +169,7 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                    cost_usd=_calculate_cost(usage, outcome),
                     failover_details=outcome.get("_failures"),
                 )
                 return JSONResponse(result)
@@ -282,6 +304,7 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            cost_usd=_calculate_cost(usage, outcome),
             failover_details=outcome.get("_failures"),
         )
     except Exception as e:

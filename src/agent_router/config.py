@@ -47,6 +47,10 @@ class ProviderConfig(BaseModel):
     timeout_seconds: float = 120.0
     failure_threshold: int | None = None
     recovery_timeout: float | None = None
+    cost_input: float | None = None
+    cost_output: float | None = None
+    cost_cache_read: float | None = None
+    cost_cache_write: float | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -153,6 +157,10 @@ def load_config(config_path: str | Path) -> AppConfig:
                         timeout_seconds=pdef.timeout_seconds,
                         failure_threshold=pdef.failure_threshold,
                         recovery_timeout=pdef.recovery_timeout,
+                        cost_input=ref.get("cost_input"),
+                        cost_output=ref.get("cost_output"),
+                        cost_cache_read=ref.get("cost_cache_read"),
+                        cost_cache_write=ref.get("cost_cache_write"),
                     )
                 )
             except KeyError as e:

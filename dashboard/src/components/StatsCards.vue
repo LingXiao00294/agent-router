@@ -24,6 +24,10 @@
       <div class="stat-value">{{ formatTokens(summary.total_cache_read) }}</div>
       <div class="stat-label">Cache 读取</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-value">{{ formatTokens(summary.total_cache_write) }}</div>
+      <div class="stat-label">Cache 写入</div>
+    </div>
   </div>
 </template>
 

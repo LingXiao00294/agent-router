@@ -222,6 +222,10 @@ class Router:
                     outcome["provider_model"] = provider_cfg.model
                     outcome["provider_url"] = provider_cfg.base_url
                     outcome["attempt"] = attempt
+                    outcome["cost_input"] = provider_cfg.cost_input
+                    outcome["cost_output"] = provider_cfg.cost_output
+                    outcome["cost_cache_read"] = provider_cfg.cost_cache_read
+                    outcome["cost_cache_write"] = provider_cfg.cost_cache_write
 
                 return result
 
@@ -310,6 +314,10 @@ class Router:
                     outcome["provider_model"] = provider_cfg.model
                     outcome["provider_url"] = provider_cfg.base_url
                     outcome["attempt"] = attempt
+                    outcome["cost_input"] = provider_cfg.cost_input
+                    outcome["cost_output"] = provider_cfg.cost_output
+                    outcome["cost_cache_read"] = provider_cfg.cost_cache_read
+                    outcome["cost_cache_write"] = provider_cfg.cost_cache_write
 
                 return  # 流成功完成
 

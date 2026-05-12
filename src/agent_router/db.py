@@ -180,6 +180,8 @@ class CallStore:
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
                 SUM(input_tokens) AS total_input_tokens,
                 SUM(output_tokens) AS total_output_tokens,
+                SUM(cache_read_tokens) AS total_cache_read,
+                SUM(cache_write_tokens) AS total_cache_write,
                 SUM(cost_usd) AS total_cost_usd
             FROM calls GROUP BY virtual_model"""
         )
@@ -203,6 +205,8 @@ class CallStore:
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
                 SUM(input_tokens) AS total_input_tokens,
                 SUM(output_tokens) AS total_output_tokens,
+                SUM(cache_read_tokens) AS total_cache_read,
+                SUM(cache_write_tokens) AS total_cache_write,
                 SUM(cost_usd) AS total_cost_usd
             FROM calls WHERE provider_model IS NOT NULL
             GROUP BY provider_model"""
@@ -215,6 +219,10 @@ class CallStore:
                 DATE(timestamp) AS day,
                 COUNT(*) AS count,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+                SUM(input_tokens) AS input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(cache_read_tokens) AS cache_read_tokens,
+                SUM(cache_write_tokens) AS cache_write_tokens,
                 SUM(cost_usd) AS cost_usd
             FROM calls
             WHERE timestamp >= DATE('now', ?)
