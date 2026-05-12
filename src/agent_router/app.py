@@ -62,7 +62,10 @@ def create_app(
 
     # 注册 config API
     async def _reload_config() -> None:
-        new_config = load_config(config_path)
+        try:
+            new_config = load_config(config_path)
+        except SystemExit:
+            raise RuntimeError("新配置语义无效，旧配置保持不变")
         await router_engine.reload_config(new_config)
 
     config_router = create_config_router(config_path, reload_config_fn=_reload_config)
