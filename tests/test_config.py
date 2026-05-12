@@ -5,7 +5,12 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from agent_router.config import load_config
+from httpx import ASGITransport, AsyncClient
+
+from agent_router.app import create_app
+from agent_router.config import AppConfig, ProviderConfig, load_config
+from agent_router.db import CallStore
+from agent_router.routing import Router
 
 
 def _write_toml(content: str) -> Path:
@@ -303,3 +308,363 @@ priority = 1
                 load_config(path)
         finally:
             path.unlink()
+
+
+class TestReloadConfig:
+    """Router.reload_config 单元测试."""
+
+    @pytest.mark.asyncio
+    async def test_reload_updates_models(self, sample_config, http_client):
+        router = Router(sample_config, http_client)
+        assert set(router.model_names) == {"haiku-router", "sonnet-router"}
+
+        new_config = AppConfig(
+            server=sample_config.server,
+            models={
+                "new-model": [
+                    ProviderConfig(
+                        type="anthropic",
+                        name="p1",
+                        model="m-new",
+                        api_key="k",
+                        base_url="https://api.com",
+                        priority=1,
+                    ),
+                ],
+            },
+        )
+        await router.reload_config(new_config)
+        assert router.model_names == ["new-model"]
+        assert router.config.models["new-model"][0].model == "m-new"
+
+    @pytest.mark.asyncio
+    async def test_reload_preserves_circuit_breaker(self, sample_config, http_client):
+        router = Router(sample_config, http_client)
+        # 触发一个熔断
+        await router.circuit_breaker.record_failure("anthropic", immediate=True)
+        state = await router.circuit_breaker.state("anthropic")
+        assert state.value == "open"
+
+        new_config = AppConfig(
+            server=sample_config.server,
+            models={"m": [ProviderConfig(
+                type="anthropic", name="anthropic", model="x",
+                api_key="k", base_url="https://api.com", priority=1,
+            )]},
+        )
+        await router.reload_config(new_config)
+
+        # 熔断状态保留
+        state = await router.circuit_breaker.state("anthropic")
+        assert state.value == "open"
+
+
+_TOML_TEMPLATE = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[[models.{model_name}]]
+provider = "p1"
+model = "{model_name}"
+priority = 1
+"""
+
+
+class TestHotReloadAPI:
+    """PUT /api/config 热重载集成测试."""
+
+    @pytest.fixture
+    async def store(self):
+        s = CallStore(":memory:")
+        await s.init()
+        yield s
+        await s.close()
+
+    @pytest.mark.asyncio
+    async def test_put_config_hot_reload(self, store):
+        """PUT 后 /v1/models 应立即返回新模型，无需重启."""
+        path = _write_toml(_TOML_TEMPLATE.format(model_name="old-model"))
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                # 确认初始模型
+                resp = await ac.get("/v1/models")
+                assert resp.json()["data"][0]["id"] == "old-model"
+
+                # PUT 新配置
+                new_body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                    },
+                    "models": {
+                        "new-model": [
+                            {"provider": "p1", "model": "new-model", "priority": 1},
+                        ],
+                    },
+                }
+                resp = await ac.put("/api/config", json=new_body)
+                assert resp.status_code == 200
+                assert resp.json()["message"] == "配置已更新并热重载"
+
+                # 热重载后模型应已变化
+                resp = await ac.get("/v1/models")
+                assert resp.json()["data"][0]["id"] == "new-model"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_put_config_priority_change(self, store):
+        """修改优先级后热重载生效."""
+        toml = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[providers.p2]
+type = "anthropic"
+api_key = "sk-test2"
+base_url = "https://api2.anthropic.com"
+
+[[models.mymodel]]
+provider = "p1"
+model = "model-a"
+priority = 1
+
+[[models.mymodel]]
+provider = "p2"
+model = "model-b"
+priority = 2
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                # 初始: p1 优先
+                resp = await ac.get("/api/config/models")
+                models = resp.json()
+                assert models["mymodel"][0]["provider"] == "p1"
+
+                # 交换优先级
+                new_body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                        "p2": {
+                            "type": "anthropic",
+                            "api_key": "sk-test2",
+                            "base_url": "https://api2.anthropic.com",
+                        },
+                    },
+                    "models": {
+                        "mymodel": [
+                            {"provider": "p2", "model": "model-b", "priority": 1},
+                            {"provider": "p1", "model": "model-a", "priority": 2},
+                        ],
+                    },
+                }
+                resp = await ac.put("/api/config", json=new_body)
+                assert resp.status_code == 200
+
+                # 热重载后优先级已变化
+                resp = await ac.get("/api/config/models")
+                models = resp.json()
+                assert models["mymodel"][0]["provider"] == "p2"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_put_missing_models_preserves_existing(self, store):
+        """PUT body 缺少 models 时应保留已有模型配置."""
+        path = _write_toml(_TOML_TEMPLATE.format(model_name="keep-me"))
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                # body 不含 models
+                body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                    },
+                }
+                resp = await ac.put("/api/config", json=body)
+                assert resp.status_code == 200
+
+                # 模型应保留
+                resp = await ac.get("/v1/models")
+                data = resp.json()["data"]
+                assert len(data) == 1
+                assert data[0]["id"] == "keep-me"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_put_missing_router_preserves_existing(self, store):
+        """PUT body 缺少 router 时应保留已有 router 配置."""
+        toml = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+failure_threshold = 10
+recovery_timeout = 300.0
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[[models.m1]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                # body 不含 router
+                body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                    },
+                    "models": {
+                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
+                    },
+                }
+                resp = await ac.put("/api/config", json=body)
+                assert resp.status_code == 200
+
+                # 验证 router 段保留
+                resp = await ac.get("/api/config")
+                cfg = resp.json()
+                assert cfg["router"]["failure_threshold"] == 10
+                assert cfg["router"]["recovery_timeout"] == 300.0
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_put_new_provider_with_masked_key_rejected(self, store):
+        """新建 provider 用脱敏 api_key 应返回 400."""
+        path = _write_toml(_TOML_TEMPLATE.format(model_name="m1"))
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                        "new-provider": {
+                            "type": "anthropic",
+                            "api_key": "sk-a****-xy",  # 脱敏值
+                            "base_url": "https://new.api.com",
+                        },
+                    },
+                    "models": {
+                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
+                    },
+                }
+                resp = await ac.put("/api/config", json=body)
+                assert resp.status_code == 400
+                assert "new-provider" in resp.json()["detail"]
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_reload_updates_circuit_breaker_thresholds(self, store):
+        """热重载后熔断器阈值应同步更新."""
+        toml = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+failure_threshold = 5
+recovery_timeout = 600.0
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[[models.m1]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                # 修改 router 阈值
+                body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "router": {
+                        "failure_threshold": 3,
+                        "recovery_timeout": 120.0,
+                    },
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                    },
+                    "models": {
+                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
+                    },
+                }
+                resp = await ac.put("/api/config", json=body)
+                assert resp.status_code == 200
+
+                # 重新加载配置验证阈值已更新
+                new_config = load_config(path)
+                assert new_config.router.failure_threshold == 3
+                assert new_config.router.recovery_timeout == 120.0
+        finally:
+            path.unlink(missing_ok=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -126,7 +127,10 @@ def _write_toml(config_path: str, data: dict) -> None:
     tmp_path.replace(config_path)
 
 
-def create_config_router(config_path: str) -> APIRouter:
+def create_config_router(
+    config_path: str,
+    reload_config_fn: Callable[[], Awaitable[None]] | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["config"])
 
     @router.get("/api/config")
@@ -176,9 +180,18 @@ def create_config_router(config_path: str) -> APIRouter:
         """全量更新配置并写回 config.toml.
 
         api_key 为空或脱敏值时保留原有值，防止误覆盖.
+        缺少 router/models 段时合并已有配置，防止误丢失.
         """
         try:
             existing = _read_config_raw(config_path)
+            body = deepcopy(body)
+
+            # 合并缺失段：server、router、providers、models
+            for section in ("server", "router", "providers", "models"):
+                if section not in body:
+                    body[section] = existing.get(section, {})
+
+            # api_key 脱敏值保留原有值
             existing_providers = existing.get("providers", {})
             for pname, pdata in body.get("providers", {}).items():
                 api_key = pdata.get("api_key", "")
@@ -198,6 +211,14 @@ def create_config_router(config_path: str) -> APIRouter:
             raise
         except Exception as e:
             raise HTTPException(500, f"写入配置失败: {e}")
-        return {"status": "ok", "message": "配置已更新，请重启 router 生效"}
+
+        # 热重载
+        if reload_config_fn is not None:
+            try:
+                await reload_config_fn()
+            except Exception as e:
+                raise HTTPException(500, f"配置已写入但热重载失败: {e}")
+
+        return {"status": "ok", "message": "配置已更新并热重载"}
 
     return router

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
-from agent_router.config import AppConfig
+from agent_router.config import AppConfig, load_config
 from agent_router.db import CallStore
 from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
 
@@ -61,7 +61,14 @@ def create_app(
     app.include_router(metrics_router)
 
     # 注册 config API
-    config_router = create_config_router(config_path)
+    async def _reload_config() -> None:
+        try:
+            new_config = load_config(config_path)
+        except SystemExit:
+            raise RuntimeError("新配置语义无效，旧配置保持不变")
+        await router_engine.reload_config(new_config)
+
+    config_router = create_config_router(config_path, reload_config_fn=_reload_config)
     app.include_router(config_router)
 
     @app.get("/health")
