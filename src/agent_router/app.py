@@ -28,18 +28,18 @@ def _calculate_cost(usage: dict, outcome: dict) -> float | None:
     cost_output = outcome.get("cost_output")
     cost_cache_read = outcome.get("cost_cache_read")
     cost_cache_write = outcome.get("cost_cache_write")
-    if cost_input is None and cost_output is None:
+    if all(v is None for v in (cost_input, cost_output, cost_cache_read, cost_cache_write)):
         return None
     total = 0.0
     if cost_input is not None:
-        total += (usage.get("input_tokens") or 0) * cost_input / 1_000_000
+        total += usage.get("input_tokens", 0) * cost_input / 1_000_000
     if cost_output is not None:
-        total += (usage.get("output_tokens") or 0) * cost_output / 1_000_000
+        total += usage.get("output_tokens", 0) * cost_output / 1_000_000
     if cost_cache_read is not None:
-        total += (usage.get("cache_read_input_tokens") or 0) * cost_cache_read / 1_000_000
+        total += usage.get("cache_read_input_tokens", 0) * cost_cache_read / 1_000_000
     if cost_cache_write is not None:
-        total += (usage.get("cache_creation_input_tokens") or 0) * cost_cache_write / 1_000_000
-    return round(total, 6) if total > 0 else None
+        total += usage.get("cache_creation_input_tokens", 0) * cost_cache_write / 1_000_000
+    return round(total, 6)
 
 
 # 从 SSE 流中提取 usage 的正则 (message_start 有 input_tokens, message_delta 有 output_tokens)
