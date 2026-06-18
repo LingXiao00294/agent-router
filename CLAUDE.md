@@ -17,7 +17,7 @@ agent-router 是一个本地 LLM API 路由代理，将虚拟模型名映射到�
 # Python 后端
 uv sync                                    # 安装/同步依赖（Python >=3.12）
 uv run agent-router                        # 启动 (默认读取 config.toml)
-uv run agent-router -c config.toml -p 9089 --db calls.db
+uv run agent-router -c config.toml -p 9456 --db calls.db
 uv run pytest                              # 运行所有测试
 uv run pytest tests/test_routing.py -v     # 运行单个测试文件
 uv run pytest -k "test_name" -v            # 按名称匹配运行
@@ -25,7 +25,7 @@ uv run ruff check src tests                # Lint
 uv run ty check src tests                 # 类型检查
 
 # 前端 Dashboard
-cd dashboard && npm run dev                # 开发模式 (Vite 代理后端到 127.0.0.1:9089)
+cd dashboard && npm run dev                # 开发模式 (Vite 代理后端到 127.0.0.1:9456)
 cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 ```
 
