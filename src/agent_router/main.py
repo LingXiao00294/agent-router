@@ -46,7 +46,12 @@ def main() -> None:
     if args.port:
         config.server.port = args.port
 
-    setup_logging(config.server.log_level)
+    setup_logging(
+        level=config.server.log_level,
+        log_file=config.server.log_file,
+        log_max_bytes=config.server.log_max_bytes,
+        log_backup_count=config.server.log_backup_count,
+    )
 
     store = CallStore(args.db)
 

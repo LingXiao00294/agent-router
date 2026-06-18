@@ -58,6 +58,10 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 9456
     log_level: Literal["debug", "info", "warning", "error"] = "info"
+    # 运行日志本地文件（相对 cwd）；为空则只输出到 stdout。
+    log_file: str = "logs/agent-router.log"
+    log_max_bytes: int = 10_000_000
+    log_backup_count: int = 5
 
 
 class RouterConfig(BaseModel):

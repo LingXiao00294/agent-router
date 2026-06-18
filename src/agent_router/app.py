@@ -70,7 +70,12 @@ def create_app(
             raise RuntimeError("新配置语义无效，旧配置保持不变")
         # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
         await router_engine.reload_config(new_config)
-        reconfigure_logging(new_config.server.log_level)
+        reconfigure_logging(
+            level=new_config.server.log_level,
+            log_file=new_config.server.log_file,
+            log_max_bytes=new_config.server.log_max_bytes,
+            log_backup_count=new_config.server.log_backup_count,
+        )
 
     config_router = create_config_router(config_path, reload_config_fn=_reload_config)
     app.include_router(config_router)

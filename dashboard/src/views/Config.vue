@@ -24,6 +24,9 @@
               <option value="error">error</option>
             </select>
           </label>
+          <label>日志文件 <input v-model="serverConfig.log_file" placeholder="logs/agent-router.log（留空只stdout）" class="input" /></label>
+          <label>日志大小限制 <input v-model.number="serverConfig.log_max_bytes" type="number" class="input short" /> 字节</label>
+          <label>日志备份数 <input v-model.number="serverConfig.log_backup_count" type="number" class="input short" /> 份</label>
         </div>
       </section>
 
@@ -127,7 +130,7 @@ const saving = ref(false);
 const message = ref("");
 const messageType = ref("success");
 
-const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug" });
+const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug", log_file: "logs/agent-router.log", log_max_bytes: 10000000, log_backup_count: 5 });
 
 const routerConfig = ref({ failure_threshold: 5, recovery_timeout: 600 });
 
@@ -204,6 +207,9 @@ async function loadConfig() {
       host: providers.server.host || "127.0.0.1",
       port: providers.server.port || 9456,
       log_level: providers.server.log_level || "debug",
+      log_file: providers.server.log_file ?? "logs/agent-router.log",
+      log_max_bytes: providers.server.log_max_bytes ?? 10000000,
+      log_backup_count: providers.server.log_backup_count ?? 5,
     };
   }
 

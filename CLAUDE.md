@@ -85,10 +85,10 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 ### 监控 (`monitoring.py`)
 
 - structlog 结构化日志，经 `ProcessorFormatter` 统一桥接 structlog / stdlib / uvicorn 日志到同一渲染管线
-- debug 级别彩色 ConsoleRenderer（开发），info 及以上 JSONRenderer（生产），输出到 stdout，时间戳 UTC ISO
-- 敏感字段（api_key / authorization / token 等）经 `redact_secrets` processor 自动脱敏
+- **双路输出**：stdout 彩色简洁单行（长字段截断、`errors` 列表折叠为条数摘要），本地文件（默认 `logs/agent-router.log`，`RotatingFileHandler` 按大小轮转）落全量 JSON，便于排查；`log_file` 空则只 stdout
+- 时间戳 UTC ISO；敏感字段（api_key / authorization / token 等）经 `redact_secrets` processor 自动脱敏，两路均生效
 - `request_id` 由 HTTP 中间件注入 contextvars，routing / circuit / app 全链路自动贯穿；支持 `X-Request-ID` 请求头透传与响应头回写
-- `log_level` 支持 `PUT /api/config` 热重载（`reconfigure_logging`）
+- `log_file` / `log_max_bytes` / `log_backup_count` 通过 `[server]` 配置，`log_level` 及日志文件配置均支持 `PUT /api/config` 热重载
 - uvicorn 文本 access log 已关闭，由中间件的结构化 `http.request` 日志接管
 
 ### API 路由

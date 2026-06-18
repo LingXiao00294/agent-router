@@ -18,6 +18,9 @@ config.toml
 calls.db
 *.db-journal
 
+# Runtime logs
+logs/
+
 
 .claude
 TODO.md

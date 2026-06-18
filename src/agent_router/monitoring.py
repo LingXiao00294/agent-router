@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -35,6 +38,9 @@ _SENSITIVE_KEYS = frozenset(
 _KEEP_PREFIX = 4
 _KEEP_SUFFIX = 2
 
+# stdout 单行摘要中，单个字符串字段值的最大字符数（超出截断）。
+_STDOUT_VALUE_MAX = 120
+
 
 def _redact(value: Any) -> str:
     """脱敏单个值：保留前 4 + 后 2 字符，中间以 *** 代替；过短则全 ***。"""
@@ -67,9 +73,27 @@ def _scrub(obj: Any) -> Any:
     return obj
 
 
-def redact_secrets(_logger: Any, _name: str, event_dict: dict) -> dict:
+def redact_secrets(
+    _logger: Any, _name: str, event_dict: MutableMapping[str, Any]
+) -> Mapping[str, Any]:
     """structlog processor：递归脱敏事件字典中的敏感字段。"""
     return _scrub(event_dict)
+
+
+def _brief_stdout_filter(
+    _logger: Any, _name: str, event_dict: MutableMapping[str, Any]
+) -> Mapping[str, Any]:
+    """stdout 简洁化 processor：截断过长的字符串字段，并把 errors 列表折叠为摘要。
+
+    仅作用于 stdout 渲染链；完整字段仍以 JSON 写入本地日志文件，便于事后排查。
+    """
+    errs = event_dict.get("errors")
+    if isinstance(errs, list):
+        event_dict["errors"] = f"<{len(errs)} 条，详见日志文件>"
+    for k, v in list(event_dict.items()):
+        if isinstance(v, str) and len(v) > _STDOUT_VALUE_MAX:
+            event_dict[k] = v[:_STDOUT_VALUE_MAX] + "...(截断)"
+    return event_dict
 
 
 def _shared_processors() -> list:
@@ -82,50 +106,96 @@ def _shared_processors() -> list:
     ]
 
 
-def setup_logging(level: str = "info") -> None:
+def setup_logging(
+    level: str = "info",
+    log_file: str = "logs/agent-router.log",
+    log_max_bytes: int = 10_000_000,
+    log_backup_count: int = 5,
+) -> None:
     """配置结构化日志，可重复调用（热重载时复用）。
 
-    - debug 级别：彩色控制台输出（开发）
-    - info 及以上：JSON 结构化输出（生产）
-    - 经 ProcessorFormatter 统一桥接 stdlib / uvicorn 等第三方库日志到同一渲染管线
-    - 输出到 stdout，敏感字段自动脱敏，时间戳为 UTC ISO
+    输出双路：
+    - stdout：彩色简洁单行（长字段截断、errors 折叠），便于终端实时浏览
+    - 本地文件（log_file，默认 logs/agent-router.log，按大小轮转）：全量 JSON
+
+    structlog / stdlib / uvicorn 日志经 ProcessorFormatter 统一走同一渲染管线；
+    时间戳 UTC ISO，敏感字段自动脱敏。log_file 为空字符串时只输出到 stdout。
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
-    is_json = log_level > logging.DEBUG
 
-    # 清除 structlog 全局配置与缓存，确保重复调用（含新日志级别）即时生效。
+    # 清除 structlog 全局配置与缓存，确保重复调用（含新级别/新文件）即时生效。
     structlog.reset_defaults()
 
-    renderer = JSONRenderer() if is_json else ConsoleRenderer(colors=True)
-    renderer_processors = [
+    shared = _shared_processors()
+
+    stdout_processors = [
+        ProcessorFormatter.remove_processors_meta,
+        _brief_stdout_filter,
+        ConsoleRenderer(colors=True),
+    ]
+    json_processors = [
         ProcessorFormatter.remove_processors_meta,
         StackInfoRenderer(),
         format_exc_info,
-        renderer,
+        JSONRenderer(),
     ]
 
-    # structlog 自身日志：经 shared_processors 后包装成 LogRecord，
-    # 交给 ProcessorFormatter 统一渲染（与 stdlib 日志走同一出口）。
     structlog.configure(
-        processors=[*_shared_processors(), ProcessorFormatter.wrap_for_formatter],
+        processors=[*shared, ProcessorFormatter.wrap_for_formatter],
         logger_factory=LoggerFactory(),
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
-        # 关闭缓存，保证运行时热切换日志级别对所有 logger 实例生效。
+        # 关闭缓存，保证运行时热切换日志配置对所有 logger 实例生效。
         cache_logger_on_first_use=False,
     )
 
-    # foreign（stdlib）日志先走 foreign_pre_chain，再与 structlog 日志一起走 renderer。
-    formatter = ProcessorFormatter(
-        foreign_pre_chain=_shared_processors(),
-        processors=renderer_processors,
+    handlers: list[logging.Handler] = []
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(
+        ProcessorFormatter(foreign_pre_chain=shared, processors=stdout_processors)
+    )
+    # stdout 固定 INFO+：debug 配置下第三方库（httpcore/aiosqlite 等）的
+    # DEBUG 噪音不刷屏，仅以 INFO+ 业务日志进入终端；debug 全量仍写本地文件。
+    stdout_handler.setLevel(max(log_level, logging.INFO))
+    handlers.append(stdout_handler)
+
+    if log_file:
+        path = Path(log_file)
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            str(path),
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(
+            ProcessorFormatter(foreign_pre_chain=shared, processors=json_processors)
+        )
+        handlers.append(file_handler)
+
+    # force=True 移除既有 handler 重新配置 root，避免热重载时 handler 累积。
+    logging.basicConfig(handlers=handlers, level=log_level, force=True)
+
+    structlog.get_logger("monitoring").info(
+        "logging.configured",
+        level=level,
+        log_file=log_file or None,
+        stdout="brief",
+        file="full_json" if log_file else None,
     )
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
-    # force=True 移除既有 handler 重新配置 root，避免热重载时 handler 累积。
-    logging.basicConfig(handlers=[handler], level=log_level, force=True)
 
-
-def reconfigure_logging(level: str) -> None:
-    """运行时热切换日志级别（供 PUT /api/config 热重载调用）。"""
-    setup_logging(level)
+def reconfigure_logging(
+    level: str = "info",
+    log_file: str = "logs/agent-router.log",
+    log_max_bytes: int = 10_000_000,
+    log_backup_count: int = 5,
+) -> None:
+    """运行时热切换日志配置（供 PUT /api/config 热重载调用）。"""
+    setup_logging(
+        level=level,
+        log_file=log_file,
+        log_max_bytes=log_max_bytes,
+        log_backup_count=log_backup_count,
+    )
