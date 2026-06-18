@@ -19,6 +19,12 @@ from structlog.processors import (
 )
 from structlog.stdlib import LoggerFactory, ProcessorFormatter
 
+from agent_router.config import (
+    DEFAULT_LOG_BACKUP_COUNT,
+    DEFAULT_LOG_FILE,
+    DEFAULT_LOG_MAX_BYTES,
+)
+
 # 命中即对值脱敏的敏感键名（小写精确匹配）。
 _SENSITIVE_KEYS = frozenset(
     {
@@ -154,9 +160,9 @@ def _shared_processors() -> list:
 
 def setup_logging(
     level: str = "info",
-    log_file: str = "logs/agent-router.log",
-    log_max_bytes: int = 10_000_000,
-    log_backup_count: int = 5,
+    log_file: str = DEFAULT_LOG_FILE,
+    log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+    log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT,
 ) -> None:
     """配置结构化日志，可重复调用（热重载时复用）。
 
@@ -232,16 +238,6 @@ def setup_logging(
     )
 
 
-def reconfigure_logging(
-    level: str = "info",
-    log_file: str = "logs/agent-router.log",
-    log_max_bytes: int = 10_000_000,
-    log_backup_count: int = 5,
-) -> None:
-    """运行时热切换日志配置（供 PUT /api/config 热重载调用）。"""
-    setup_logging(
-        level=level,
-        log_file=log_file,
-        log_max_bytes=log_max_bytes,
-        log_backup_count=log_backup_count,
-    )
+# 运行时热切换日志配置（供 PUT /api/config 热重载调用）。
+# 与 setup_logging 行为完全一致，单独命名仅为在调用点表达「热重载」语义。
+reconfigure_logging = setup_logging

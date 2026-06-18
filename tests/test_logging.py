@@ -227,6 +227,28 @@ def test_reconfigure_logging_switches_level(tmp_path):
     assert "should.appear" in raw
 
 
+def test_reconfigure_closes_old_file_handlers(tmp_path):
+    """回归：热重载日志配置时，旧的 RotatingFileHandler 必须被 close，
+    避免文件句柄泄漏（logging.basicConfig(force=True) 负责关闭）。"""
+    from logging.handlers import RotatingFileHandler
+    from unittest.mock import patch
+
+    log_file = tmp_path / "app.log"
+    monitoring.setup_logging("info", log_file=str(log_file))
+    old_file_handlers = [
+        h for h in logging.getLogger().handlers if isinstance(h, RotatingFileHandler)
+    ]
+    assert old_file_handlers, "首次配置应注册文件 handler"
+
+    # 用 patch.object spy close：重配时 basicConfig(force=True) 会调用旧 handler.close。
+    with patch.object(old_file_handlers[0], "close") as mock_close:
+        monitoring.reconfigure_logging("warning", log_file=str(log_file))
+    assert mock_close.called, "旧文件 handler 未被关闭"
+    assert all(
+        h not in logging.getLogger().handlers for h in old_file_handlers
+    ), "旧文件 handler 仍残留在 root"
+
+
 def test_log_file_optional_stdout_only(tmp_path, capsys):
     """log_file 为空时只输出到 stdout，不创建文件 handler。"""
     monitoring.setup_logging("info", log_file="")

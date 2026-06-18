@@ -130,6 +130,7 @@ const saving = ref(false);
 const message = ref("");
 const messageType = ref("success");
 
+// 初始默认值需与后端 config.py 的 DEFAULT_LOG_* / ServerConfig 保持一致；实际值由 loadConfig() 覆盖。
 const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug", log_file: "logs/agent-router.log", log_max_bytes: 10000000, log_backup_count: 5 });
 
 const routerConfig = ref({ failure_threshold: 5, recovery_timeout: 600 });
