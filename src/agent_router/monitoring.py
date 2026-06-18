@@ -85,15 +85,24 @@ def _is_sensitive(key: Any) -> bool:
     return any(k.endswith(s) for s in _SENSITIVE_SUFFIXES)
 
 
+# _scrub 递归进入的容器类型（dict 之外的序列/集合）。
+# JSONRenderer 会把 tuple 序列化为 JSON 数组，故 tuple 内的敏感字段同样
+# 必须脱敏；set/frozenset 元素经 str() 渲染，递归保证其中 dict 元素也被处理。
+_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+
+
 def _scrub(obj: Any) -> Any:
-    """递归脱敏 dict / list 中键名敏感的字段（值脱敏，键名保留）。
+    """递归脱敏容器中键名敏感的字段（值脱敏，键名保留）。
+
+    覆盖 dict / list / tuple / set / frozenset：tuple 经 JSONRenderer 序列化
+    为 JSON 数组，若不递归其内 dict 的敏感字段会原样泄漏到日志文件。
 
     快速路径：当前层级既无敏感键又无嵌套容器时原样返回，避免在无敏感内容的
     高频日志上逐键重建字典。
     """
     if isinstance(obj, dict):
         if not any(
-            _is_sensitive(k) or isinstance(v, (dict, list)) for k, v in obj.items()
+            _is_sensitive(k) or isinstance(v, _CONTAINER_TYPES) for k, v in obj.items()
         ):
             return obj
         return {
@@ -101,6 +110,12 @@ def _scrub(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_scrub(item) for item in obj]
+    if isinstance(obj, tuple):
+        return tuple(_scrub(item) for item in obj)
+    if isinstance(obj, set):
+        return {_scrub(item) for item in obj}
+    if isinstance(obj, frozenset):
+        return frozenset(_scrub(item) for item in obj)
     return obj
 
 

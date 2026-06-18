@@ -31,6 +31,18 @@ _SSE_MSG_DELTA_RE = re.compile(
     rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
 )
 
+# 合法 X-Request-ID：仅字母数字与 - _，长度 ≤128；违规则回退到生成的 uuid，
+# 避免客户端注入超长/特殊字符污染日志与响应头。
+_REQUEST_ID_MAX_LEN = 128
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _sanitize_request_id(raw: str | None) -> str:
+    """校验客户端透传的 X-Request-ID，非法则回退到新 uuid。"""
+    if raw and _REQUEST_ID_RE.fullmatch(raw):
+        return raw
+    return str(uuid.uuid4())
+
 
 def create_app(
     config: AppConfig, store: CallStore, config_path: str = "config.toml"
@@ -241,11 +253,15 @@ def create_app(
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         """请求级中间件：注入 request_id 到日志上下文，并记录结构化请求日志。"""
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request_id = _sanitize_request_id(request.headers.get("x-request-id"))
         bind_contextvars(request_id=request_id)
         start = time.time()
         try:
             response = await call_next(request)
+            # 注意：对 StreamingResponse，call_next 在响应对象创建后即返回（状态码
+            # 200、首字节尚未发送），故此处 duration_ms 仅度量请求 setup / 首字节前
+            # 耗时，status_code 恒为 200 即便流中途出错。流式真实耗时与最终状态以
+            # _stream_wrapper 内 store.record(...) 为准。
             logger.info(
                 "http.request",
                 method=request.method,

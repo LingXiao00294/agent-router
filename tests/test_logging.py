@@ -9,6 +9,7 @@ import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from agent_router import monitoring
+from agent_router.app import _sanitize_request_id
 
 
 def _last_json_line(text: str) -> dict:
@@ -125,6 +126,45 @@ def test_sensitive_data_redacted_in_lists_and_compound_keys(tmp_path):
     assert "***" in data["session_token"]
     # 非敏感字段原样保留。
     assert data["public_label"] == "keep-me"
+
+
+def test_sensitive_data_redacted_in_tuples(tmp_path):
+    """覆盖 _scrub 的 tuple 分支：tuple 经 JSONRenderer 序列化为 JSON 数组，
+    其内 dict 的敏感字段同样必须脱敏（回归：旧实现只处理 dict/list，tuple 泄漏）。"""
+    log_file = tmp_path / "app.log"
+    monitoring.setup_logging("info", log_file=str(log_file))
+    structlog.get_logger("t").info(
+        "leak.tuple",
+        items=({"access_token": "tok-TUPLE"}, {"client_secret": "shh-tuple"}),
+    )
+
+    _flush()
+    raw = log_file.read_text(encoding="utf-8")
+    assert "tok-TUPLE" not in raw and "shh-tuple" not in raw
+    data = _last_json_line(raw)
+    # tuple 序列化为数组，其中 dict 的敏感字段被脱敏。
+    assert "***" in data["items"][0]["access_token"]
+    assert "***" in data["items"][1]["client_secret"]
+
+
+def test_sanitize_request_id():
+    """X-Request-ID 仅放行 [A-Za-z0-9_-]{1,128}，超长/含特殊字符/空值回退 uuid。"""
+    # 合法值原样透传。
+    assert _sanitize_request_id("req-abc_123") == "req-abc_123"
+    # 空值 / None 回退 uuid。
+    assert _sanitize_request_id(None) != ""
+    assert _sanitize_request_id("") != ""
+    # 含空格 / 特殊字符回退。
+    assert _sanitize_request_id("req id") != "req id"
+    assert _sanitize_request_id("req\nid") != "req\nid"  # CRLF 注入尝试
+    assert _sanitize_request_id("req/id") != "req/id"
+    # 超长（>128）回退。
+    assert _sanitize_request_id("a" * 129) != "a" * 129
+    # 128 字符边界放行。
+    assert _sanitize_request_id("a" * 128) == "a" * 128
+    # 回退值本身须是合法 uuid 形态（含 4 个连字符）。
+    fallback = _sanitize_request_id("bad value")
+    assert fallback.count("-") == 4 and len(fallback) == 36
 
 
 def test_sensitive_keys_not_over_matched(tmp_path):
