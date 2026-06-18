@@ -95,6 +95,58 @@ def test_sensitive_data_redacted_in_file(tmp_path):
     assert data["nested"]["safe"] == 1
 
 
+def test_sensitive_data_redacted_in_lists_and_compound_keys(tmp_path):
+    """覆盖 _scrub 列表分支，以及 access_token / client_secret 等复合敏感键名。
+
+    回归：旧实现仅做精确匹配，access_token / refresh_token / client_secret /
+    api_secret 等会原样泄漏到日志文件。
+    """
+    log_file = tmp_path / "app.log"
+    monitoring.setup_logging("info", log_file=str(log_file))
+    structlog.get_logger("t").info(
+        "leak.compound",
+        items=[{"access_token": "tok-AAA"}, {"refresh_token": "tok-BBB"}],
+        client_secret="shh-secret",
+        api_secret="api-sss",
+        session_token="sess-TTT",
+        public_label="keep-me",  # 非敏感，不应被改写
+    )
+
+    _flush()
+    raw = log_file.read_text(encoding="utf-8")
+    assert "tok-AAA" not in raw and "tok-BBB" not in raw
+    assert "shh-secret" not in raw and "api-sss" not in raw and "sess-TTT" not in raw
+    data = _last_json_line(raw)
+    # 列表中的敏感字段被脱敏，结构保留。
+    assert data["items"][0]["access_token"] != "tok-AAA"
+    assert "***" in data["items"][0]["access_token"]
+    assert "***" in data["client_secret"]
+    assert "***" in data["api_secret"]
+    assert "***" in data["session_token"]
+    # 非敏感字段原样保留。
+    assert data["public_label"] == "keep-me"
+
+
+def test_sensitive_keys_not_over_matched(tmp_path):
+    """业务字段 token_count / tokenizer / model 不应被误脱敏。"""
+    log_file = tmp_path / "app.log"
+    monitoring.setup_logging("info", log_file=str(log_file))
+    structlog.get_logger("t").info(
+        "no.overreach",
+        token_count=42,
+        tokenizer="cl100k",
+        model="claude-haiku-4-5",
+        secret_counter=7,  # 不以 _secret/secret 结尾……实际 "secret_counter" 不含敏感后缀
+    )
+
+    _flush()
+    data = _last_json_line(log_file.read_text(encoding="utf-8"))
+    assert data["token_count"] == 42
+    assert data["tokenizer"] == "cl100k"
+    assert data["model"] == "claude-haiku-4-5"
+    assert data["secret_counter"] == 7
+
+
 def test_request_id_via_contextvars(tmp_path):
     log_file = tmp_path / "app.log"
     monitoring.setup_logging("info", log_file=str(log_file))

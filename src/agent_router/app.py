@@ -12,7 +12,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from structlog.contextvars import bind_contextvars, clear_contextvars, get_contextvars
+from structlog.contextvars import bind_contextvars, get_contextvars, unbind_contextvars
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
@@ -119,7 +119,7 @@ def create_app(
         start_time = time.time()
         # 中间件已绑定 request_id；此处显式取出，供流式场景在中间件清理上下文后
         # 仍能把同一 request_id 贯穿到 routing 层日志：StreamingResponse 的 body 在
-        # 中间件返回后才被 ASGI 消费，此时 contextvars 已被 clear_contextvars 清空，
+        # 中间件返回后才被 ASGI 消费，此时中间件已 unbind request_id，
         # routing 层会 fallback 到新 uuid 而与 http.request 日志断链。
         request_id = get_contextvars().get("request_id")
 
@@ -265,7 +265,9 @@ def create_app(
             )
             raise
         finally:
-            clear_contextvars()
+            # 仅解绑本中间件注入的 request_id，避免误清请求处理期间绑定的其它
+            # 上下文（如 tenant / user id）；clear_contextvars 会清空全部 structlog 上下文。
+            unbind_contextvars("request_id")
 
     # 托管 dashboard 静态文件 (放在最后，避免覆盖 API 路由)
     _mount_dashboard(app)
@@ -362,6 +364,10 @@ async def _stream_wrapper(
             }
         )
         yield f"event: error\ndata: {error_body}\n\n".encode()
+    finally:
+        # 解绑本 wrapper 绑定的 request_id，保持上下文对称清理。
+        if request_id is not None:
+            unbind_contextvars("request_id")
 
 
 def _mount_dashboard(app: FastAPI) -> None:

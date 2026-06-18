@@ -19,7 +19,7 @@ from structlog.processors import (
 )
 from structlog.stdlib import LoggerFactory, ProcessorFormatter
 
-# 需要脱敏的字段名（按小写匹配），命中即对值脱敏。
+# 命中即对值脱敏的敏感键名（小写精确匹配）。
 _SENSITIVE_KEYS = frozenset(
     {
         "api_key",
@@ -31,7 +31,33 @@ _SENSITIVE_KEYS = frozenset(
         "secret",
         "x-api-key",
         "set-cookie",
+        "cookie",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "auth_token",
+        "session_token",
+        "client_secret",
+        "api_secret",
+        "secret_key",
+        "access_key",
+        "private_key",
     }
+)
+
+# 敏感键名后缀（小写）。键名以任一后缀结尾即视为敏感，覆盖未来新增的
+# 复合命名（如 ``oauth_token``、``db_password``）。后缀自带分隔符或为
+# 完整裸词，避免 ``token_count`` / ``tokenizer`` 等业务字段误伤。
+_SENSITIVE_SUFFIXES = (
+    "_token",
+    "_secret",
+    "_key",
+    "-key",
+    "apikey",
+    "password",
+    "authorization",
+    "secret",
+    "token",
 )
 
 # 脱敏后保留的前缀 / 后缀长度。
@@ -51,7 +77,12 @@ def _redact(value: Any) -> str:
 
 
 def _is_sensitive(key: Any) -> bool:
-    return isinstance(key, str) and key.lower() in _SENSITIVE_KEYS
+    if not isinstance(key, str):
+        return False
+    k = key.lower()
+    if k in _SENSITIVE_KEYS:
+        return True
+    return any(k.endswith(s) for s in _SENSITIVE_SUFFIXES)
 
 
 def _scrub(obj: Any) -> Any:
