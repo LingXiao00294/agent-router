@@ -8,6 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+# 运行日志默认值（ServerConfig 与 monitoring.setup_logging 共用，避免多处字面量漂移）。
+DEFAULT_LOG_FILE = "logs/agent-router.log"
+DEFAULT_LOG_MAX_BYTES = 10_000_000
+DEFAULT_LOG_BACKUP_COUNT = 5
+
 
 class ProviderDef(BaseModel):
     """Provider 基础定义 — 每个 provider 只配置一次."""
@@ -58,6 +63,10 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 9456
     log_level: Literal["debug", "info", "warning", "error"] = "info"
+    # 运行日志本地文件（相对 cwd）；为空则只输出到 stdout。
+    log_file: str = DEFAULT_LOG_FILE
+    log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
+    log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
 
 
 class RouterConfig(BaseModel):

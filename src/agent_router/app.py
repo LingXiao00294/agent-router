@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-import traceback
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,11 +12,13 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from structlog.contextvars import bind_contextvars, get_contextvars, unbind_contextvars
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig, load_config
 from agent_router.db import CallStore
+from agent_router.monitoring import reconfigure_logging
 from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
 
 logger = structlog.get_logger(__name__)
@@ -28,6 +30,18 @@ _SSE_MSG_START_RE = re.compile(
 _SSE_MSG_DELTA_RE = re.compile(
     rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
 )
+
+# 合法 X-Request-ID：仅字母数字与 - _，长度 ≤128；违规则回退到生成的 uuid，
+# 避免客户端注入超长/特殊字符污染日志与响应头。
+_REQUEST_ID_MAX_LEN = 128
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _sanitize_request_id(raw: str | None) -> str:
+    """校验客户端透传的 X-Request-ID，非法则回退到新 uuid。"""
+    if raw and _REQUEST_ID_RE.fullmatch(raw):
+        return raw
+    return str(uuid.uuid4())
 
 
 def create_app(
@@ -66,7 +80,14 @@ def create_app(
             new_config = load_config(config_path)
         except SystemExit:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
+        # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
         await router_engine.reload_config(new_config)
+        reconfigure_logging(
+            level=new_config.server.log_level,
+            log_file=new_config.server.log_file,
+            log_max_bytes=new_config.server.log_max_bytes,
+            log_backup_count=new_config.server.log_backup_count,
+        )
 
     config_router = create_config_router(config_path, reload_config_fn=_reload_config)
     app.include_router(config_router)
@@ -108,6 +129,11 @@ def create_app(
         virtual_model = body.get("model", "unknown")
         is_stream = body.get("stream", False)
         start_time = time.time()
+        # 中间件已绑定 request_id；此处显式取出，供流式场景在中间件清理上下文后
+        # 仍能把同一 request_id 贯穿到 routing 层日志：StreamingResponse 的 body 在
+        # 中间件返回后才被 ASGI 消费，此时中间件已 unbind request_id，
+        # routing 层会 fallback 到新 uuid 而与 http.request 日志断链。
+        request_id = get_contextvars().get("request_id")
 
         try:
             if is_stream:
@@ -120,6 +146,7 @@ def create_app(
                         virtual_model=virtual_model,
                         request_body=body,
                         start_time=start_time,
+                        request_id=request_id,
                     ),
                     media_type="text/event-stream",
                     headers={
@@ -211,7 +238,7 @@ def create_app(
                 "request.error",
                 model=virtual_model,
                 error=str(e),
-                traceback=traceback.format_exc(),
+                exc_info=True,
             )
             return JSONResponse(
                 {
@@ -223,6 +250,41 @@ def create_app(
                 status_code=502,
             )
 
+    @app.middleware("http")
+    async def request_logging_middleware(request: Request, call_next):
+        """请求级中间件：注入 request_id 到日志上下文，并记录结构化请求日志。"""
+        request_id = _sanitize_request_id(request.headers.get("x-request-id"))
+        bind_contextvars(request_id=request_id)
+        start = time.time()
+        try:
+            response = await call_next(request)
+            # 注意：对 StreamingResponse，call_next 在响应对象创建后即返回（状态码
+            # 200、首字节尚未发送），故此处 duration_ms 仅度量请求 setup / 首字节前
+            # 耗时，status_code 恒为 200 即便流中途出错。流式真实耗时与最终状态以
+            # _stream_wrapper 内 store.record(...) 为准。
+            logger.info(
+                "http.request",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=round((time.time() - start) * 1000),
+            )
+            response.headers["X-Request-ID"] = request_id
+            return response
+        except Exception:
+            logger.error(
+                "http.request_error",
+                method=request.method,
+                path=request.url.path,
+                duration_ms=round((time.time() - start) * 1000),
+                exc_info=True,
+            )
+            raise
+        finally:
+            # 仅解绑本中间件注入的 request_id，避免误清请求处理期间绑定的其它
+            # 上下文（如 tenant / user id）；clear_contextvars 会清空全部 structlog 上下文。
+            unbind_contextvars("request_id")
+
     # 托管 dashboard 静态文件 (放在最后，避免覆盖 API 路由)
     _mount_dashboard(app)
 
@@ -230,14 +292,21 @@ def create_app(
 
 
 async def _stream_wrapper(
-    stream, *, outcome, store, virtual_model, request_body, start_time
+    stream, *, outcome, store, virtual_model, request_body, start_time, request_id
 ):
-    """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
+    """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage.
+
+    request_id 由端点显式传入：本 wrapper 在中间件清理 contextvars 之后才被
+    ASGI 消费，需在此重新绑定，使 routing 层（route_stream 函数体在首次
+    async for 时才执行）的日志与 http.request 共用同一 request_id。
+    """
     buffer = b""
     usage: dict = {}
     got_msg_start = False
     got_msg_delta = False
 
+    if request_id is not None:
+        bind_contextvars(request_id=request_id)
     try:
         async for chunk in stream:
             yield chunk
@@ -311,6 +380,10 @@ async def _stream_wrapper(
             }
         )
         yield f"event: error\ndata: {error_body}\n\n".encode()
+    finally:
+        # 解绑本 wrapper 绑定的 request_id，保持上下文对称清理。
+        if request_id is not None:
+            unbind_contextvars("request_id")
 
 
 def _mount_dashboard(app: FastAPI) -> None:
