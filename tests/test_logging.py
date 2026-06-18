@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import pytest
 import structlog
@@ -145,3 +146,87 @@ def test_log_file_optional_stdout_only(tmp_path, capsys):
     assert not any(
         isinstance(h, logging.FileHandler) for h in logging.getLogger().handlers
     )
+
+
+async def test_streaming_request_id_propagates(tmp_path):
+    """回归：流式 request_id 须贯穿到 routing 层日志，即使中间件已清理上下文。
+
+    真实时序下（uvicorn），StreamingResponse 的 body 在中间件
+    ``clear_contextvars`` 之后才被 ASGI 消费；若 routing 层仅依赖 contextvars，
+    会 fallback 到新 uuid 与 ``http.request`` 断链。本测试复现该时序：先
+    ``clear_contextvars`` 模拟中间件已返回，再消费由 ``_stream_wrapper`` 包裹
+    的 ``route_stream``，断言 routing 层日志仍拿到端点显式传入的 request_id。
+    """
+    import httpx
+
+    from agent_router.app import _stream_wrapper
+    from agent_router.config import AppConfig, ProviderConfig, ServerConfig
+    from agent_router.db import CallStore
+    from agent_router.routing import Router
+
+    log_file = tmp_path / "app.log"
+    monitoring.setup_logging("info", log_file=str(log_file))
+
+    sse = (
+        b'event: message_start\n'
+        b'data: {"message":{"usage":{"input_tokens":10}}}\n\n'
+        b'event: message_delta\n'
+        b'data: {"usage":{"output_tokens":5}}\n\n'
+        b'event: message_stop\n'
+        b'data: {}\n\n'
+    )
+    mock_transport = httpx.MockTransport(
+        lambda req: httpx.Response(200, content=sse)
+    )
+    http_client = httpx.AsyncClient(transport=mock_transport)
+
+    config = AppConfig(
+        server=ServerConfig(host="127.0.0.1", port=9456),
+        models={
+            "vm": [
+                ProviderConfig(
+                    type="anthropic",
+                    name="anthropic",
+                    model="claude-haiku-4-5",
+                    api_key="sk-ant-test",
+                    base_url="https://api.anthropic.com",
+                    priority=1,
+                )
+            ]
+        },
+    )
+    router_engine = Router(config, http_client)
+    store = CallStore(str(tmp_path / "calls.db"))
+    await store.init()
+
+    # 模拟中间件在返回 StreamingResponse 后已清理上下文（真实 uvicorn 时序）。
+    clear_contextvars()
+    try:
+        outcome: dict = {}
+        body = {"model": "vm", "stream": True, "max_tokens": 100,
+                "messages": [{"role": "user", "content": "hi"}]}
+        async for _ in _stream_wrapper(
+            router_engine.route_stream(body, outcome),
+            outcome=outcome,
+            store=store,
+            virtual_model="vm",
+            request_body=body,
+            start_time=time.time(),
+            request_id="REQ-FIX-123",
+        ):
+            pass
+    finally:
+        await http_client.aclose()
+        await store.close()
+
+    _flush()
+    raw = log_file.read_text(encoding="utf-8")
+    starts = [
+        json.loads(ln) for ln in raw.splitlines()
+        if '"request.start"' in ln and '"stream": true' in ln
+    ]
+    assert starts, "routing 层未记录流式 request.start 日志"
+    assert all(d.get("request_id") == "REQ-FIX-123" for d in starts), (
+        f"流式 routing 层 request_id 未贯穿: {[d.get('request_id') for d in starts]}"
+    )
+

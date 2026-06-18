@@ -12,7 +12,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from structlog.contextvars import bind_contextvars, clear_contextvars
+from structlog.contextvars import bind_contextvars, clear_contextvars, get_contextvars
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
@@ -117,6 +117,11 @@ def create_app(
         virtual_model = body.get("model", "unknown")
         is_stream = body.get("stream", False)
         start_time = time.time()
+        # 中间件已绑定 request_id；此处显式取出，供流式场景在中间件清理上下文后
+        # 仍能把同一 request_id 贯穿到 routing 层日志：StreamingResponse 的 body 在
+        # 中间件返回后才被 ASGI 消费，此时 contextvars 已被 clear_contextvars 清空，
+        # routing 层会 fallback 到新 uuid 而与 http.request 日志断链。
+        request_id = get_contextvars().get("request_id")
 
         try:
             if is_stream:
@@ -129,6 +134,7 @@ def create_app(
                         virtual_model=virtual_model,
                         request_body=body,
                         start_time=start_time,
+                        request_id=request_id,
                     ),
                     media_type="text/event-stream",
                     headers={
@@ -268,14 +274,21 @@ def create_app(
 
 
 async def _stream_wrapper(
-    stream, *, outcome, store, virtual_model, request_body, start_time
+    stream, *, outcome, store, virtual_model, request_body, start_time, request_id
 ):
-    """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage."""
+    """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage.
+
+    request_id 由端点显式传入：本 wrapper 在中间件清理 contextvars 之后才被
+    ASGI 消费，需在此重新绑定，使 routing 层（route_stream 函数体在首次
+    async for 时才执行）的日志与 http.request 共用同一 request_id。
+    """
     buffer = b""
     usage: dict = {}
     got_msg_start = False
     got_msg_delta = False
 
+    if request_id is not None:
+        bind_contextvars(request_id=request_id)
     try:
         async for chunk in stream:
             yield chunk
