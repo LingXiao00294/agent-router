@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 import structlog
+from structlog.contextvars import get_contextvars
 
 from agent_router.circuit_breaker import CircuitBreaker
 from agent_router.config import AppConfig, ProviderConfig
@@ -173,7 +174,7 @@ class Router:
         virtual_model = request_body.get("model", "")
         providers = await self._get_providers(virtual_model)
 
-        request_id = str(uuid.uuid4())
+        request_id = get_contextvars().get("request_id") or str(uuid.uuid4())
         start_time = time.time()
         errors: list[dict] = []
 
@@ -253,7 +254,7 @@ class Router:
         virtual_model = request_body.get("model", "")
         providers = await self._get_providers(virtual_model)
 
-        request_id = str(uuid.uuid4())
+        request_id = get_contextvars().get("request_id") or str(uuid.uuid4())
         start_time = time.time()
         errors: list[dict] = []
 

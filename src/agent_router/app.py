@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-import traceback
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,11 +12,13 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig, load_config
 from agent_router.db import CallStore
+from agent_router.monitoring import reconfigure_logging
 from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
 
 logger = structlog.get_logger(__name__)
@@ -66,7 +68,9 @@ def create_app(
             new_config = load_config(config_path)
         except SystemExit:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
+        # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
         await router_engine.reload_config(new_config)
+        reconfigure_logging(new_config.server.log_level)
 
     config_router = create_config_router(config_path, reload_config_fn=_reload_config)
     app.include_router(config_router)
@@ -211,7 +215,7 @@ def create_app(
                 "request.error",
                 model=virtual_model,
                 error=str(e),
-                traceback=traceback.format_exc(),
+                exc_info=True,
             )
             return JSONResponse(
                 {
@@ -222,6 +226,35 @@ def create_app(
                 },
                 status_code=502,
             )
+
+    @app.middleware("http")
+    async def request_logging_middleware(request: Request, call_next):
+        """请求级中间件：注入 request_id 到日志上下文，并记录结构化请求日志。"""
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        bind_contextvars(request_id=request_id)
+        start = time.time()
+        try:
+            response = await call_next(request)
+            logger.info(
+                "http.request",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=round((time.time() - start) * 1000),
+            )
+            response.headers["X-Request-ID"] = request_id
+            return response
+        except Exception:
+            logger.error(
+                "http.request_error",
+                method=request.method,
+                path=request.url.path,
+                duration_ms=round((time.time() - start) * 1000),
+                exc_info=True,
+            )
+            raise
+        finally:
+            clear_contextvars()
 
     # 托管 dashboard 静态文件 (放在最后，避免覆盖 API 路由)
     _mount_dashboard(app)

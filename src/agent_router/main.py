@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 import uvicorn
 from dotenv import load_dotenv
@@ -66,7 +65,11 @@ def main() -> None:
         host=config.server.host,
         port=config.server.port,
         log_level=config.server.log_level,
-        access_log=config.server.log_level == "debug",
+        # 关闭 uvicorn 文本 access log（由 request_logging_middleware 的结构化日志接管）。
+        access_log=False,
+        # 禁用 uvicorn 默认 dictConfig，让其日志 propagate 到 root handler，
+        # 由 monitoring.setup_logging 统一结构化（JSON / 彩色）输出。
+        log_config=None,
     )
 
 
