@@ -14,13 +14,33 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from "vue";
-import * as echarts from "echarts";
-import type { ECharts, EChartsOption } from "echarts";
+import * as echarts from "echarts/core";
+import { BarChart, LineChart, PieChart } from "echarts/charts";
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+} from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+import type { EChartsOption } from "echarts";
 import { useResizeObserver } from "@vueuse/core";
 import UiCard from "./ui/UiCard.vue";
 import UiSkeleton from "./ui/UiSkeleton.vue";
 import UiEmpty from "./ui/UiEmpty.vue";
 import { useChartTheme } from "../composables/useChartTheme";
+
+// 按需注册本项目用到的图表与组件，避免打入完整 echarts（chunk 从 ~1MB 降至 ~350KB）
+echarts.use([
+  BarChart,
+  LineChart,
+  PieChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+  CanvasRenderer,
+]);
 
 const props = withDefaults(
   defineProps<{
@@ -43,7 +63,7 @@ const props = withDefaults(
 );
 
 const chartRef = ref<HTMLElement | null>(null);
-let chart: ECharts | null = null;
+let chart: ReturnType<typeof echarts.init> | null = null;
 
 const { baseOption, colors } = useChartTheme();
 
