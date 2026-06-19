@@ -27,7 +27,7 @@
 
       <RefRow
         v-for="(ref, idx) in entry.refs"
-        :key="idx"
+        :key="ref.id"
         :ref-item="ref"
         :provider-names="providerNames"
         :provider-error="providerError(idx)"

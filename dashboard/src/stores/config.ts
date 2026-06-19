@@ -13,6 +13,7 @@ import {
 } from "../api";
 
 export interface ProviderEntry {
+  id: number;
   name: string;
   type: string;
   api_key: string;
@@ -23,10 +24,20 @@ export interface ProviderEntry {
   recovery_timeout: number | null;
 }
 
-export interface ModelEntry {
-  name: string;
-  refs: ModelRef[];
+export interface ModelRefEntry extends ModelRef {
+  id: number;
 }
+
+export interface ModelEntry {
+  id: number;
+  name: string;
+  refs: ModelRefEntry[];
+}
+
+// 前端-only 的稳定 id，用作 v-for key，避免增删/重排时组件实例错位。
+// 不会进入 buildConfigBody，不发给后端。
+let _idSeed = 0;
+const nextId = () => ++_idSeed;
 
 const DEFAULT_SERVER: ServerConfig = {
   host: "127.0.0.1",
@@ -111,6 +122,7 @@ export const useConfigStore = defineStore("config", () => {
       };
 
       providerEntries.value = Object.entries(cfg.providers || {}).map(([name, p]) => ({
+        id: nextId(),
         name,
         type: p.type || "anthropic",
         api_key: p.api_key || "",
@@ -122,8 +134,10 @@ export const useConfigStore = defineStore("config", () => {
       }));
 
       modelEntries.value = Object.entries(models || {}).map(([name, refs]) => ({
+        id: nextId(),
         name,
         refs: (refs || []).map((r) => ({
+          id: nextId(),
           provider: r.provider || "",
           model: r.model || "",
           priority: r.priority || 99,
@@ -259,6 +273,7 @@ export const useConfigStore = defineStore("config", () => {
 
   function addProvider() {
     providerEntries.value.push({
+      id: nextId(),
       name: "",
       type: "anthropic",
       api_key: "",
@@ -283,7 +298,7 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   function addModel() {
-    modelEntries.value.push({ name: "", refs: [] });
+    modelEntries.value.push({ id: nextId(), name: "", refs: [] });
   }
 
   function removeModel(idx: number) {
@@ -291,7 +306,12 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   function addRef(model: ModelEntry) {
-    model.refs.push({ provider: "", model: "", priority: model.refs.length + 1 });
+    model.refs.push({
+      id: nextId(),
+      provider: "",
+      model: "",
+      priority: model.refs.length + 1,
+    });
   }
 
   function removeRef(model: ModelEntry, idx: number) {

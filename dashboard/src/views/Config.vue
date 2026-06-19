@@ -101,7 +101,7 @@
 
         <ProviderCard
           v-for="(p, idx) in configStore.providerEntries"
-          :key="idx"
+          :key="p.id"
           :entry="p"
           :name-error="configStore.fieldError(`providers[${idx}].name`)"
           :timeout-error="configStore.fieldError(`providers[${idx}].timeout_seconds`)"
@@ -126,7 +126,7 @@
 
         <ModelCard
           v-for="(m, idx) in configStore.modelEntries"
-          :key="idx"
+          :key="m.id"
           :entry="m"
           :provider-names="configStore.providerNames"
           :name-error="configStore.fieldError(`models[${idx}].name`)"
