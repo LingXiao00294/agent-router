@@ -120,7 +120,11 @@ watch(colors, () => {
 });
 
 function exportImage(): string | undefined {
-  return chart?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#1e1e2e" });
+  return chart?.getDataURL({
+    type: "png",
+    pixelRatio: 2,
+    backgroundColor: colors.value.tooltipBg,
+  });
 }
 
 defineExpose({ exportImage });
