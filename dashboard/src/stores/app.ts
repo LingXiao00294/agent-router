@@ -1,12 +1,16 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { usePreferredDark } from "@vueuse/core";
+import { useLocalStorageState } from "../composables/useLocalStorageState";
 
 type ThemeMode = "dark" | "light" | "system";
 
 export const useAppStore = defineStore("app", () => {
   const themeMode = ref<ThemeMode>("dark");
-  const sidebarCollapsed = ref(false);
+  const sidebarCollapsed = useLocalStorageState<boolean>(
+    "agent-router-sidebar-collapsed",
+    false
+  );
   const preferredDark = usePreferredDark();
 
   const resolvedTheme = computed<"dark" | "light">(() => {
