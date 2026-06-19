@@ -59,6 +59,9 @@ export const useConfigStore = defineStore("config", () => {
   const providerEntries = ref<ProviderEntry[]>([]);
   const modelEntries = ref<ModelEntry[]>([]);
   const circuitStates = ref<Record<string, string>>({});
+  const circuitLoading = ref(false);
+  const circuitError = ref<string | null>(null);
+  const resetting = ref<string | null>(null);
 
   const loading = ref(false);
   const saving = ref(false);
@@ -95,10 +98,15 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function loadCircuitStates() {
+    circuitLoading.value = true;
+    circuitError.value = null;
     try {
       circuitStates.value = await fetchCircuitBreakerStates();
-    } catch {
+    } catch (err) {
       circuitStates.value = {};
+      circuitError.value = err instanceof Error ? err.message : "加载熔断状态失败";
+    } finally {
+      circuitLoading.value = false;
     }
   }
 
@@ -267,8 +275,13 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function handleResetCircuitBreaker(provider: string) {
-    await resetCircuitBreaker(provider);
-    await loadCircuitStates();
+    resetting.value = provider;
+    try {
+      await resetCircuitBreaker(provider);
+      await loadCircuitStates();
+    } finally {
+      resetting.value = null;
+    }
   }
 
   function addProvider() {
@@ -338,6 +351,9 @@ export const useConfigStore = defineStore("config", () => {
     providerEntries,
     modelEntries,
     circuitStates,
+    circuitLoading,
+    circuitError,
+    resetting,
     loading,
     saving,
     error,

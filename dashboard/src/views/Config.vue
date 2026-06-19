@@ -81,7 +81,9 @@
 
       <CircuitBreakerPanel
         :states="configStore.circuitStates"
-        :loading="false"
+        :loading="configStore.circuitLoading"
+        :error="configStore.circuitError"
+        :resetting="configStore.resetting"
         @refresh="configStore.loadCircuitStates"
         @reset="resetCircuit"
       />
