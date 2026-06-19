@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - run: uv sync --frozen
+      # ruff / ty 暂未加入：仓库存在既有告警（unused imports / NoneGuard），
+      # 待清理后启用。pytest 已全绿，作为后端质量门禁。
+      - run: uv run pytest
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+        working-directory: dashboard
+      # build 脚本含 vue-tsc 类型检查，作为前端质量门禁
+      - run: npm run build
+        working-directory: dashboard
