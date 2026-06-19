@@ -14,11 +14,9 @@ let watchersCount = 0;
 function tick() {
   lastTick.value = Date.now();
   callbacks.forEach((cb) => {
-    try {
-      void cb();
-    } catch {
-      // ignore
-    }
+    Promise.resolve(cb()).catch(() => {
+      // 单个回调失败不应中断其他回调
+    });
   });
 }
 

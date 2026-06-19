@@ -34,8 +34,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-
 let idSeed = 0;
 
 withDefaults(
@@ -66,7 +64,7 @@ const emit = defineEmits<{
   (e: "blur", event: FocusEvent): void;
 }>();
 
-const inputId = computed(() => `ui-input-${++idSeed}`);
+const inputId = `ui-input-${++idSeed}`;
 
 function onInput(event: Event) {
   emit("update:modelValue", (event.target as HTMLInputElement).value);

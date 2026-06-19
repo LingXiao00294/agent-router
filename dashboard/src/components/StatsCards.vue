@@ -1,12 +1,14 @@
 <template>
   <div class="stats-grid">
-    <UiCard v-if="loading" v-for="i in 6" :key="i" class="stat-skeleton" padding>
-      <UiSkeleton variant="text" class="skeleton-value" />
-      <UiSkeleton variant="text" class="skeleton-label" />
-    </UiCard>
+    <template v-if="loading">
+      <UiCard v-for="i in 6" :key="i" class="stat-skeleton">
+        <UiSkeleton variant="text" class="skeleton-value" />
+        <UiSkeleton variant="text" class="skeleton-label" />
+      </UiCard>
+    </template>
 
     <template v-else-if="summary">
-      <UiCard v-for="item in items" :key="item.label" class="stat-card" hoverable padding>
+      <UiCard v-for="item in items" :key="item.label" class="stat-card" hoverable>
         <div class="stat-value" :class="item.color">{{ item.value }}</div>
         <div class="stat-label">{{ item.label }}</div>
       </UiCard>

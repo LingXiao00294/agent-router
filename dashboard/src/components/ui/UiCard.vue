@@ -1,5 +1,5 @@
 <template>
-  <div class="ui-card" :class="{ hoverable, padding }">
+  <div class="ui-card" :class="{ hoverable }">
     <div v-if="$slots.header || title" class="card-header">
       <slot name="header">
         <h3 class="card-title">{{ title }}</h3>
@@ -21,12 +21,10 @@ withDefaults(
     title?: string;
     subtitle?: string;
     hoverable?: boolean;
-    padding?: boolean;
     bodyPadding?: boolean;
   }>(),
   {
     hoverable: false,
-    padding: true,
     bodyPadding: true,
   }
 );

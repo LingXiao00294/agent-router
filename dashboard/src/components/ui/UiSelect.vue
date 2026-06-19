@@ -75,7 +75,7 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
 }>();
 
-const selectId = computed(() => `ui-select-${++idSeed}`);
+const selectId = `ui-select-${++idSeed}`;
 
 const normalizedOptions = computed<SelectOption[]>(() =>
   props.options.map((o) =>
