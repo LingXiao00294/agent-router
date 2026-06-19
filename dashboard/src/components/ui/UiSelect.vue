@@ -22,6 +22,15 @@
           {{ opt.label }}
         </option>
       </select>
+      <button
+        v-if="clearable && hasValue"
+        type="button"
+        class="select-clear"
+        aria-label="清除"
+        @click="clear"
+      >
+        ×
+      </button>
       <span class="select-arrow">▼</span>
     </div>
     <p v-if="error" class="select-error">{{ error }}</p>
@@ -51,12 +60,14 @@ const props = withDefaults(
     error?: string;
     hint?: string;
     inline?: boolean;
+    clearable?: boolean;
   }>(),
   {
     placeholder: "请选择",
     disabled: false,
     required: false,
     inline: false,
+    clearable: false,
   }
 );
 
@@ -71,6 +82,12 @@ const normalizedOptions = computed<SelectOption[]>(() =>
     typeof o === "string" ? { label: o, value: o } : o
   )
 );
+
+const hasValue = computed(() => props.modelValue !== "" && props.modelValue != null);
+
+function clear() {
+  emit("update:modelValue", "");
+}
 
 function onChange(event: Event) {
   emit("update:modelValue", (event.target as HTMLSelectElement).value);
@@ -140,6 +157,27 @@ defineExpose({
   pointer-events: none;
   font-size: var(--text-xs);
   color: var(--color-text-muted);
+}
+
+.select-clear {
+  position: absolute;
+  right: var(--space-7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-surface1);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+.select-clear:hover {
+  background: var(--color-danger);
+  color: var(--color-crust);
 }
 
 .select-error {
