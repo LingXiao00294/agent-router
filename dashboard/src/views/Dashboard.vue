@@ -1,129 +1,197 @@
 <template>
   <div class="dashboard">
-    <div class="top-bar">
-      <h2>仪表盘</h2>
-      <div class="top-bar-right">
-        <label class="toggle-label">
-          <input type="checkbox" v-model="autoRefresh" />
-          自动刷新
-        </label>
-        <button class="refresh-btn" @click="loadAll">刷新</button>
-      </div>
+    <PageHeader title="仪表盘" subtitle="实时监控路由调用与模型状态">
+      <template #actions>
+        <AutoRefreshControl />
+        <UiButton variant="primary" :loading="metrics.loading || calls.loading" @click="refresh">
+          <template #icon>↻</template>
+          刷新
+        </UiButton>
+      </template>
+    </PageHeader>
+
+    <UiErrorBanner
+      v-if="metrics.error"
+      :message="metrics.error"
+      retry
+      class="global-error"
+      @retry="refresh"
+    />
+
+    <StatsCards :summary="metrics.summary" :loading="metrics.loading" />
+
+    <TrendChart v-model:days="trendDays" :data="metrics.dailyTrend" :loading="metrics.loading" />
+
+    <ModelChart :data="metrics.byRealModel" :loading="metrics.loading" />
+
+    <div class="filter-bar">
+      <ModelFilter
+        ref="modelFilterRef"
+        v-model:model-value="filterModelProxy"
+        v-model:status-value="filterStatusProxy"
+        :models="modelOptions"
+      />
+      <UiButton size="sm" variant="ghost" @click="clearFilters">清除筛选</UiButton>
     </div>
 
-    <StatsCards v-if="summary" :summary="summary" />
+    <CallsTable
+      :calls="calls.calls"
+      :total="calls.total"
+      :page="calls.page"
+      :size="calls.size"
+      :pages="calls.pages"
+      :loading="calls.loading"
+      :error="calls.error"
+      :filter-model="calls.filterModel"
+      :filter-status="calls.filterStatus"
+      @select="showDetail"
+      @page="calls.changePage"
+      @refresh="calls.loadCalls"
+      @clear-filters="clearFilters"
+    />
 
-    <TrendChart />
-
-    <ModelChart />
-
-    <section class="section">
-      <div class="section-header">
-        <h3>最近调用</h3>
-        <select v-model="filterModel" @change="changePage(1)" class="filter-select">
-          <option value="">全部模型</option>
-          <option v-for="m in uniqueModels" :key="m" :value="m">{{ m }}</option>
-        </select>
-      </div>
-      <CallsTable
-        :calls="calls"
-        :total="total"
-        :page="page"
-        :size="size"
-        @select="showDetail"
-        @page="changePage"
-      />
-    </section>
-
-    <CallDetail :call="detail" @close="detail = null" />
+    <CallDetail :call="calls.detail" @close="calls.closeDetail" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import type { CallRecord, Summary } from "../api";
-import { fetchSummary, fetchCalls, fetchCallDetail } from "../api";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { useMetricsStore } from "../stores/metrics";
+import { useCallsStore } from "../stores/calls";
+import { useAutoRefreshStore } from "../stores/autoRefresh";
+import { useAppStore } from "../stores/app";
+import { useToast } from "../composables/useToast";
+import PageHeader from "../components/PageHeader.vue";
 import StatsCards from "../components/StatsCards.vue";
 import TrendChart from "../components/TrendChart.vue";
 import ModelChart from "../components/ModelChart.vue";
 import CallsTable from "../components/CallsTable.vue";
 import CallDetail from "../components/CallDetail.vue";
+import AutoRefreshControl from "../components/AutoRefreshControl.vue";
+import ModelFilter from "../components/ModelFilter.vue";
+import UiButton from "../components/ui/UiButton.vue";
+import UiErrorBanner from "../components/ui/UiErrorBanner.vue";
 
-const summary = ref<Summary | null>(null);
-const calls = ref<CallRecord[]>([]);
-const total = ref(0);
-const page = ref(1);
-const size = ref(50);
-const detail = ref<CallRecord | null>(null);
-const filterModel = ref("");
-const autoRefresh = ref(true);
+const metrics = useMetricsStore();
+const calls = useCallsStore();
+const autoRefresh = useAutoRefreshStore();
+const app = useAppStore();
+const toast = useToast();
+const route = useRoute();
+const router = useRouter();
 
-let timer: ReturnType<typeof setInterval>;
+const trendDays = ref(30);
+const modelFilterRef = ref<InstanceType<typeof ModelFilter> | null>(null);
 
-const uniqueModels = computed(() => {
-  const s = new Set(calls.value.map((c) => c.virtual_model));
-  return [...s].sort();
+const modelOptions = computed(() =>
+  [...new Set(calls.calls.map((c) => c.virtual_model))].sort()
+);
+
+const filterModelProxy = computed({
+  get: () => calls.filterModel,
+  set: (v) => calls.setFilterModel(v),
 });
 
-async function loadAll() {
-  summary.value = await fetchSummary();
-  await loadCalls();
-}
-
-async function loadCalls() {
-  const data = await fetchCalls(page.value, size.value, filterModel.value);
-  calls.value = data.data;
-  total.value = data.total;
-}
-
-function changePage(p: number) {
-  page.value = p;
-  loadCalls();
-}
-
-async function showDetail(id: string) {
-  detail.value = await fetchCallDetail(id);
-}
-
-watch(autoRefresh, (on) => {
-  clearInterval(timer);
-  if (on) timer = setInterval(loadAll, 10_000);
+const filterStatusProxy = computed({
+  get: () => calls.filterStatus,
+  set: (v) => calls.setFilterStatus(v),
 });
+
+function isTypingTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === "r" || e.key === "R") {
+    if (!isTypingTarget(e.target)) {
+      e.preventDefault();
+      refresh();
+    }
+  } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    modelFilterRef.value?.focus();
+  }
+}
+
+async function refresh() {
+  try {
+    await Promise.all([metrics.loadAll(trendDays.value), calls.loadCalls()]);
+  } catch {
+    // errors handled by stores
+  }
+}
+
+function showDetail(id: string) {
+  calls.loadDetail(id).catch(() => {
+    toast.error("加载调用详情失败");
+  });
+}
+
+function clearFilters() {
+  calls.setFilterModel("");
+  calls.setFilterStatus("");
+  syncQuery();
+}
+
+function syncQuery() {
+  const q: Record<string, string> = {};
+  if (calls.filterModel) q.model = calls.filterModel;
+  if (calls.filterStatus) q.status = calls.filterStatus;
+  router.replace({ query: Object.keys(q).length ? q : undefined });
+}
+
+watch(
+  () => calls.filterModel,
+  () => syncQuery()
+);
+watch(
+  () => calls.filterStatus,
+  () => syncQuery()
+);
+watch(trendDays, () => {
+  metrics.loadDailyTrend(trendDays.value);
+});
+
+let unregisterRefresh: (() => void) | null = null;
 
 onMounted(() => {
-  loadAll();
-  if (autoRefresh.value) timer = setInterval(loadAll, 10_000);
+  app.loadTheme();
+
+  if (route.query.model && typeof route.query.model === "string") {
+    calls.filterModel = route.query.model;
+  }
+  if (route.query.status && typeof route.query.status === "string") {
+    calls.filterStatus = route.query.status;
+  }
+
+  refresh();
+  autoRefresh.start();
+  unregisterRefresh = autoRefresh.register(refresh);
+  document.addEventListener("keydown", onKeydown);
 });
 
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+  unregisterRefresh?.();
+  autoRefresh.stop();
+  document.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <style scoped>
-.dashboard { padding: 0 8px; }
-.top-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 20px;
+.dashboard {
+  padding: 0 var(--space-1);
 }
-.top-bar h2 { font-size: 20px; }
-.top-bar-right { display: flex; align-items: center; gap: 16px; }
-.toggle-label {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 13px; color: #a6adc8; cursor: pointer;
+.global-error {
+  margin-bottom: var(--space-4);
 }
-.toggle-label input { cursor: pointer; }
-.refresh-btn {
-  background: #313244; color: #cdd6f4; border: none;
-  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
-}
-.refresh-btn:hover { background: #45475a; }
-.section { margin-bottom: 24px; }
-.section-header {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 12px;
-}
-.section-header h3 { font-size: 15px; color: #cdd6f4; }
-.filter-select {
-  background: #313244; color: #cdd6f4; border: 1px solid #45475a;
-  padding: 4px 10px; border-radius: 4px; font-size: 13px;
+.filter-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 </style>

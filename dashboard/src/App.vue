@@ -1,28 +1,50 @@
 <template>
   <div class="app">
     <Sidebar />
-    <div class="main-area">
+    <main class="main-area" :class="{ collapsed: app.sidebarCollapsed }">
       <router-view />
-    </div>
+    </main>
+    <ToastProvider />
+    <UiConfirm />
   </div>
 </template>
 
 <script setup lang="ts">
+import { onMounted } from "vue";
 import Sidebar from "./components/Sidebar.vue";
+import ToastProvider from "./components/ui/ToastProvider.vue";
+import UiConfirm from "./components/ui/UiConfirm.vue";
+import { useAppStore } from "./stores/app";
+
+const app = useAppStore();
+
+onMounted(() => {
+  app.loadTheme();
+});
 </script>
 
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #11111b;
-  color: #cdd6f4;
+<style scoped>
+.app {
+  min-height: 100vh;
+  display: flex;
 }
-.app { min-height: 100vh; display: flex; }
 .main-area {
-  margin-left: 200px;
+  margin-left: var(--sidebar-width);
   flex: 1;
-  padding: 24px;
-  max-width: calc(100vw - 200px);
+  padding: var(--space-5) var(--space-6);
+  max-width: calc(100vw - var(--sidebar-width));
+  transition: margin-left var(--transition-base), max-width var(--transition-base);
+}
+.main-area.collapsed {
+  margin-left: var(--sidebar-collapsed-width);
+  max-width: calc(100vw - var(--sidebar-collapsed-width));
+}
+
+@media (max-width: 768px) {
+  .main-area {
+    margin-left: var(--sidebar-collapsed-width);
+    max-width: calc(100vw - var(--sidebar-collapsed-width));
+    padding: var(--space-4);
+  }
 }
 </style>

@@ -1,445 +1,268 @@
 <template>
   <div class="config-page">
-    <div class="top-bar">
-      <h2>配置管理</h2>
-      <button class="save-btn" @click="saveConfig" :disabled="saving">
-        {{ saving ? "保存中..." : "保存配置" }}
-      </button>
+    <PageHeader title="配置管理" subtitle="管理 providers、虚拟模型与熔断策略">
+      <template #actions>
+        <UiButton
+          variant="primary"
+          :loading="configStore.saving"
+          :disabled="!configStore.isDirty"
+          @click="save"
+        >
+          保存配置
+        </UiButton>
+      </template>
+    </PageHeader>
+
+    <UiErrorBanner
+      v-if="configStore.error"
+      :message="configStore.error"
+      retry
+      class="global-error"
+      @retry="configStore.loadConfig"
+    />
+
+    <div v-if="configStore.loading" class="loading-wrap">
+      <UiSpinner size="lg" />
+      <p class="text-muted">加载配置中...</p>
     </div>
 
-    <div v-if="loading" class="loading">加载中...</div>
-
     <template v-else>
-      <!-- Server -->
-      <section class="section">
-        <h3>Server</h3>
-        <div class="server-card">
-          <label>Host <input v-model="serverConfig.host" placeholder="127.0.0.1" class="input" /></label>
-          <label>端口 <input v-model.number="serverConfig.port" type="number" class="input short" /></label>
-          <label>日志级别
-            <select v-model="serverConfig.log_level" class="input">
-              <option value="debug">debug</option>
-              <option value="info">info</option>
-              <option value="warning">warning</option>
-              <option value="error">error</option>
-            </select>
-          </label>
-          <label>日志文件 <input v-model="serverConfig.log_file" placeholder="logs/agent-router.log（留空只stdout）" class="input" /></label>
-          <label>日志大小限制 <input v-model.number="serverConfig.log_max_bytes" type="number" class="input short" /> 字节</label>
-          <label>日志备份数 <input v-model.number="serverConfig.log_backup_count" type="number" class="input short" /> 份</label>
+      <ConfigSection title="Server">
+        <div class="form-grid">
+          <UiInput v-model="configStore.serverConfig.host" label="Host" />
+          <UiInput
+            v-model.number="configStore.serverConfig.port"
+            label="端口"
+            type="number"
+            :error="configStore.fieldError('server.port')"
+            @blur="touch('server.port')"
+          />
+          <UiSelect
+            v-model="configStore.serverConfig.log_level"
+            label="日志级别"
+            :options="['debug', 'info', 'warning', 'error']"
+          />
+          <UiInput
+            v-model="configStore.serverConfig.log_file"
+            label="日志文件"
+            hint="留空则只输出到 stdout"
+          />
+          <UiInput
+            v-model.number="configStore.serverConfig.log_max_bytes"
+            label="日志大小限制（字节）"
+            type="number"
+          />
+          <UiInput
+            v-model.number="configStore.serverConfig.log_backup_count"
+            label="日志备份数"
+            type="number"
+          />
         </div>
-      </section>
+      </ConfigSection>
 
-      <!-- Router -->
-      <section class="section">
-        <h3>Router</h3>
-        <div class="server-card">
-          <label>熔断阈值 <input v-model.number="routerConfig.failure_threshold" type="number" class="input short" /> 次连续失败</label>
-          <label>恢复超时 <input v-model.number="routerConfig.recovery_timeout" type="number" class="input short" /> 秒</label>
+      <ConfigSection title="Router">
+        <div class="form-grid">
+          <UiInput
+            v-model.number="configStore.routerConfig.failure_threshold"
+            label="熔断阈值（次连续失败）"
+            type="number"
+            :error="configStore.fieldError('router.failure_threshold')"
+            @blur="touch('router.failure_threshold')"
+          />
+          <UiInput
+            v-model.number="configStore.routerConfig.recovery_timeout"
+            label="恢复超时（秒）"
+            type="number"
+            :error="configStore.fieldError('router.recovery_timeout')"
+            @blur="touch('router.recovery_timeout')"
+          />
         </div>
-      </section>
+      </ConfigSection>
 
-      <!-- Circuit Breaker -->
-      <section class="section" v-if="Object.keys(circuitStates).length > 0">
-        <div class="section-header">
-          <h3>熔断状态</h3>
-          <button class="add-btn" @click="loadCircuitStates">刷新</button>
-        </div>
-        <div class="server-card">
-          <div v-for="(state, name) in circuitStates" :key="name" class="cb-row">
-            <span class="cb-name">{{ name }}</span>
-            <span class="cb-state" :class="stateClass[state] || 'state-ok'">{{ stateLabel[state] || state }}</span>
-            <button v-if="state !== 'closed'" class="del-btn small" @click="handleResetProvider(name)">重置</button>
-          </div>
-        </div>
-      </section>
+      <CircuitBreakerPanel
+        :states="configStore.circuitStates"
+        :loading="false"
+        @refresh="configStore.loadCircuitStates"
+        @reset="resetCircuit"
+      />
 
-      <!-- Providers -->
-      <section class="section">
-        <div class="section-header">
-          <h3>Providers</h3>
-          <button class="add-btn" @click="addProvider">+ 添加</button>
-        </div>
-        <div v-if="providerEntries.length === 0" class="empty">暂无 provider</div>
-        <div v-for="(p, idx) in providerEntries" :key="idx" class="card">
-          <div class="card-header">
-            <input v-model="p.name" placeholder="provider 名称" class="input name-input" />
-            <button class="del-btn" @click="removeProvider(idx)">删除</button>
-          </div>
-          <div class="card-body">
-            <label>类型 <select v-model="p.type" class="input"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
-            <label>API Key <input v-model="p.api_key" type="password" :placeholder="p.has_key ? '(留空则保留当前 key)' : 'sk-...'" class="input" /></label>
-            <label>Base URL <input v-model="p.base_url" placeholder="https://api.anthropic.com" class="input" /></label>
-            <label>超时 <input v-model.number="p.timeout_seconds" type="number" class="input short" /> 秒</label>
-            <label>熔断阈值 <input v-model.number="p.failure_threshold" type="number" class="input short" placeholder="默认" /> 次</label>
-            <label>恢复超时 <input v-model.number="p.recovery_timeout" type="number" class="input short" placeholder="默认" /> 秒</label>
-          </div>
-        </div>
-      </section>
+      <ConfigSection title="Providers">
+        <template #actions>
+          <UiButton size="sm" variant="secondary" @click="configStore.addProvider">
+            + 添加 Provider
+          </UiButton>
+        </template>
 
-      <!-- Models -->
-      <section class="section">
-        <div class="section-header">
-          <h3>虚拟模型</h3>
-          <button class="add-btn" @click="addModel">+ 添加</button>
-        </div>
-        <div v-if="modelEntries.length === 0" class="empty">暂无模型</div>
-        <div v-for="(m, mi) in modelEntries" :key="mi" class="card">
-          <div class="card-header">
-            <input v-model="m.name" placeholder="虚拟模型名" class="input name-input" />
-            <button class="del-btn" @click="removeModel(mi)">删除</button>
-          </div>
-          <div class="card-body">
-            <div class="section-header">
-              <span class="subtitle">Provider 链 (按 priority 排序)</span>
-              <button class="add-btn small" @click="addRef(m)">+ 添加 Provider</button>
-            </div>
-            <div
-              v-for="(ref, ri) in m.refs" :key="ri"
-              class="ref-row"
-              draggable="true"
-              @dragstart="onDragStart($event, m, ri)"
-              @dragover.prevent="onDragOver($event)"
-              @drop="onDrop($event, m, ri)"
-              @dragend="onDragEnd"
-            >
-              <span class="drag-handle" title="拖动排序">⋮⋮</span>
-              <span class="priority-badge">{{ ri + 1 }}</span>
-              <select v-model="ref.provider" class="input">
-                <option value="">选择 provider</option>
-                <option v-for="pn in providerNames" :key="pn" :value="pn">{{ pn }}</option>
-              </select>
-              <input v-model="ref.model" placeholder="真实模型名" class="input flex-1" />
-              <button class="del-btn small" @click="removeRef(m, ri)">×</button>
-            </div>
-          </div>
-        </div>
-      </section>
+        <UiEmpty
+          v-if="configStore.providerEntries.length === 0"
+          title="暂无 provider"
+          description="添加第一个 provider 以启用路由"
+        />
 
-      <div v-if="message" class="toast" :class="messageType">{{ message }}</div>
+        <ProviderCard
+          v-for="(p, idx) in configStore.providerEntries"
+          :key="idx"
+          :entry="p"
+          :name-error="configStore.fieldError(`providers[${idx}].name`)"
+          :timeout-error="configStore.fieldError(`providers[${idx}].timeout_seconds`)"
+          @remove="confirmRemoveProvider(idx)"
+          @touch-name="touch(`providers[${idx}].name`)"
+          @touch-timeout="touch(`providers[${idx}].timeout_seconds`)"
+        />
+      </ConfigSection>
+
+      <ConfigSection title="虚拟模型">
+        <template #actions>
+          <UiButton size="sm" variant="secondary" @click="configStore.addModel">
+            + 添加模型
+          </UiButton>
+        </template>
+
+        <UiEmpty
+          v-if="configStore.modelEntries.length === 0"
+          title="暂无虚拟模型"
+          description="添加虚拟模型并配置 provider 链"
+        />
+
+        <ModelCard
+          v-for="(m, idx) in configStore.modelEntries"
+          :key="idx"
+          :entry="m"
+          :provider-names="configStore.providerNames"
+          :name-error="configStore.fieldError(`models[${idx}].name`)"
+          :refs-error="configStore.fieldError(`models[${idx}].refs`)"
+          :provider-errors="m.refs.map((_, ri) => configStore.fieldError(`models[${idx}].refs[${ri}].provider`))"
+          :model-errors="m.refs.map((_, ri) => configStore.fieldError(`models[${idx}].refs[${ri}].model`))"
+          @remove="configStore.removeModel(idx)"
+          @add-ref="configStore.addRef(m)"
+          @remove-ref="configStore.removeRef(m, $event)"
+          @move-ref="(from, to) => onMoveRef(m, from, to)"
+          @touch-name="touch(`models[${idx}].name`)"
+          @touch-provider="touch(`models[${idx}].refs[${$event}].provider`)"
+          @touch-model="touch(`models[${idx}].refs[${$event}].model`)"
+        />
+      </ConfigSection>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { fetchConfig, fetchConfigModels, updateConfig, fetchCircuitBreakerStates, resetCircuitBreaker } from "../api";
+import { onMounted, onUnmounted } from "vue";
+import { onBeforeRouteLeave } from "vue-router";
+import { useConfigStore } from "../stores/config";
+import { useAppStore } from "../stores/app";
+import { useConfirm } from "../composables/useConfirm";
+import { useToast } from "../composables/useToast";
+import PageHeader from "../components/PageHeader.vue";
+import ConfigSection from "../components/ConfigSection.vue";
+import ProviderCard from "../components/ProviderCard.vue";
+import ModelCard from "../components/ModelCard.vue";
+import CircuitBreakerPanel from "../components/CircuitBreakerPanel.vue";
+import UiButton from "../components/ui/UiButton.vue";
+import UiInput from "../components/ui/UiInput.vue";
+import UiSelect from "../components/ui/UiSelect.vue";
+import UiEmpty from "../components/ui/UiEmpty.vue";
+import UiSpinner from "../components/ui/UiSpinner.vue";
+import UiErrorBanner from "../components/ui/UiErrorBanner.vue";
 
-const loading = ref(true);
-const saving = ref(false);
-const message = ref("");
-const messageType = ref("success");
+const configStore = useConfigStore();
+const app = useAppStore();
+const { confirm } = useConfirm();
+const toast = useToast();
 
-// 初始默认值需与后端 config.py 的 DEFAULT_LOG_* / ServerConfig 保持一致；实际值由 loadConfig() 覆盖。
-const serverConfig = ref({ host: "127.0.0.1", port: 9456, log_level: "debug", log_file: "logs/agent-router.log", log_max_bytes: 10000000, log_backup_count: 5 });
-
-const routerConfig = ref({ failure_threshold: 5, recovery_timeout: 600 });
-
-interface ProviderEntry {
-  name: string;
-  type: string;
-  api_key: string;
-  base_url: string;
-  timeout_seconds: number;
-  has_key?: boolean;
-  failure_threshold?: number | null;
-  recovery_timeout?: number | null;
+function touch(_path: string) {
+  configStore.validate();
 }
 
-interface ModelRef {
-  provider: string;
-  model: string;
-  priority: number;  // 自动按顺序生成，不暴露给用户
+function onMoveRef(entry: typeof configStore.modelEntries[number], from: number, to: number) {
+  configStore.moveRef(entry, from, to);
 }
 
-interface ModelEntry {
-  name: string;
-  refs: ModelRef[];
-}
-
-const providerEntries = ref<ProviderEntry[]>([]);
-const modelEntries = ref<ModelEntry[]>([]);
-const circuitStates = ref<Record<string, string>>({});
-
-const providerNames = computed(() => providerEntries.value.map((p) => p.name).filter(Boolean));
-
-async function loadCircuitStates() {
+async function save() {
   try {
-    circuitStates.value = await fetchCircuitBreakerStates();
-  } catch {
-    circuitStates.value = {};
-  }
-}
-
-async function handleResetProvider(name: string) {
-  try {
-    await resetCircuitBreaker(name);
-    await loadCircuitStates();
-    message.value = `已重置 ${name} 的熔断状态`;
-    messageType.value = "success";
-  } catch (e: any) {
-    message.value = e.message;
-    messageType.value = "error";
-  }
-}
-
-const stateLabel: Record<string, string> = {
-  closed: "正常",
-  open: "已熔断",
-  half_open: "半开",
-};
-
-const stateClass: Record<string, string> = {
-  closed: "state-ok",
-  open: "state-error",
-  half_open: "state-warn",
-};
-
-async function loadConfig() {
-  loading.value = true;
-  const [providers, models] = await Promise.all([
-    fetchConfig(),
-    fetchConfigModels(),
-  ]);
-  loadCircuitStates();
-
-  if (providers.server) {
-    serverConfig.value = {
-      host: providers.server.host || "127.0.0.1",
-      port: providers.server.port || 9456,
-      log_level: providers.server.log_level || "debug",
-      log_file: providers.server.log_file ?? "logs/agent-router.log",
-      log_max_bytes: providers.server.log_max_bytes ?? 10000000,
-      log_backup_count: providers.server.log_backup_count ?? 5,
-    };
-  }
-
-  if (providers.router) {
-    routerConfig.value = {
-      failure_threshold: providers.router.failure_threshold ?? 5,
-      recovery_timeout: providers.router.recovery_timeout ?? 600,
-    };
-  }
-
-  providerEntries.value = Object.entries(providers.providers || {}).map(([name, p]: [string, any]) => ({
-    name,
-    type: p.type || "anthropic",
-    api_key: p.api_key || "",
-    base_url: p.base_url || "",
-    timeout_seconds: p.timeout_seconds || 120,
-    has_key: !!p.has_key,
-    failure_threshold: p.failure_threshold ?? null,
-    recovery_timeout: p.recovery_timeout ?? null,
-  }));
-
-  modelEntries.value = Object.entries(models).map(([name, refs]: [string, any]) => ({
-    name,
-    refs: (refs || []).map((r: any) => ({
-      provider: r.provider || "",
-      model: r.model || "",
-      priority: r.priority || 99,
-    })),
-  }));
-
-  loading.value = false;
-}
-
-function addProvider() {
-  providerEntries.value.push({ name: "", type: "anthropic", api_key: "", base_url: "", timeout_seconds: 120, has_key: false, failure_threshold: null, recovery_timeout: null });
-}
-function removeProvider(idx: number) {
-  const name = providerEntries.value[idx]?.name;
-  if (name) {
-    // 清理所有引用该 provider 的模型
-    for (const m of modelEntries.value) {
-      m.refs = m.refs.filter((r) => r.provider !== name);
+    const ok = await configStore.saveConfig();
+    if (ok) {
+      toast.success("配置已保存并热重载");
     }
+  } catch {
+    toast.error(configStore.error || "保存失败");
   }
-  providerEntries.value.splice(idx, 1);
 }
 
-function addModel() {
-  modelEntries.value.push({ name: "", refs: [] });
-}
-function removeModel(idx: number) {
-  modelEntries.value.splice(idx, 1);
-}
-function addRef(m: ModelEntry) {
-  m.refs.push({ provider: "", model: "", priority: m.refs.length + 1 });
-}
-function removeRef(m: ModelEntry, idx: number) {
-  m.refs.splice(idx, 1);
-}
-
-// --- 拖拽排序 ---
-interface DragInfo { model: ModelEntry; idx: number }
-const dragInfo = ref<DragInfo | null>(null);
-const dragOverEl = ref<HTMLElement | null>(null);
-
-function onDragStart(e: DragEvent, model: ModelEntry, idx: number) {
-  dragInfo.value = { model, idx };
-  (e.target as HTMLElement)?.classList.add("dragging");
-  e.dataTransfer!.effectAllowed = "move";
-}
-function onDragOver(e: DragEvent) {
-  e.dataTransfer!.dropEffect = "move";
-  dragOverEl.value?.classList.remove("drag-over");
-  dragOverEl.value = (e.target as HTMLElement)?.closest(".ref-row");
-  dragOverEl.value?.classList.add("drag-over");
-}
-function onDrop(_e: DragEvent, targetModel: ModelEntry, targetIdx: number) {
-  if (!dragInfo.value || dragInfo.value.model !== targetModel) return;
-  const refs = targetModel.refs;
-  const [item] = refs.splice(dragInfo.value.idx, 1);
-  const actualTarget = dragInfo.value.idx < targetIdx ? targetIdx - 1 : targetIdx;
-  refs.splice(actualTarget, 0, item);
-}
-function onDragEnd(e: DragEvent) {
-  (e.target as HTMLElement)?.classList.remove("dragging");
-  dragOverEl.value?.classList.remove("drag-over");
-  dragInfo.value = null;
-  dragOverEl.value = null;
+async function confirmRemoveProvider(idx: number) {
+  const p = configStore.providerEntries[idx];
+  const refsCount = configStore.modelEntries.reduce(
+    (sum, m) => sum + m.refs.filter((r) => r.provider === p?.name).length,
+    0
+  );
+  const msg = refsCount
+    ? `删除 ${p?.name || "该 provider"} 会同时移除 ${refsCount} 个模型引用，是否继续？`
+    : `确定删除 ${p?.name || "该 provider"} 吗？`;
+  const ok = await confirm({
+    title: "删除 Provider",
+    message: msg,
+    confirmText: "删除",
+    variant: "danger",
+  });
+  if (ok) configStore.removeProvider(idx);
 }
 
-async function saveConfig() {
-  saving.value = true;
-  message.value = "";
-
-  const body: any = {
-    server: { ...serverConfig.value },
-    router: { ...routerConfig.value },
-    providers: {},
-    models: {},
-  };
-
-  for (const p of providerEntries.value) {
-    if (!p.name.trim()) continue;
-    body.providers[p.name] = {
-      type: p.type,
-      api_key: p.api_key || "${PLACEHOLDER}",
-      base_url: p.base_url,
-      timeout_seconds: p.timeout_seconds,
-      failure_threshold: p.failure_threshold ?? null,
-      recovery_timeout: p.recovery_timeout ?? null,
-    };
-  }
-
-  for (const m of modelEntries.value) {
-    if (!m.name.trim() || m.refs.length === 0) continue;
-    body.models[m.name] = m.refs
-      .filter((r) => r.provider && r.model)
-      .map((r, i) => ({
-        provider: r.provider,
-        model: r.model,
-        priority: i + 1,
-      }));
-  }
-
+async function resetCircuit(provider: string) {
   try {
-    const res = await updateConfig(body);
-    message.value = res.message;
-    messageType.value = "success";
-  } catch (e: any) {
-    message.value = e.message;
-    messageType.value = "error";
-  } finally {
-    saving.value = false;
+    await configStore.handleResetCircuitBreaker(provider);
+    toast.success(`已重置 ${provider} 的熔断状态`);
+  } catch {
+    toast.error("重置失败");
   }
 }
 
-onMounted(loadConfig);
+function onKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    if (!configStore.saving) save();
+  }
+}
+
+onBeforeRouteLeave(async (_to, _from, next) => {
+  if (!configStore.isDirty) return next();
+  const ok = await confirm({
+    title: "未保存的更改",
+    message: "配置已修改但未保存，确定离开吗？",
+    confirmText: "离开",
+    cancelText: "留下",
+  });
+  next(ok);
+});
+
+onMounted(() => {
+  app.loadTheme();
+  configStore.loadConfig();
+  document.addEventListener("keydown", onKeydown);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <style scoped>
-.config-page { padding: 0 8px; }
-.top-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 24px;
+.config-page {
+  padding: 0 var(--space-1);
 }
-.top-bar h2 { font-size: 20px; }
-.save-btn {
-  background: #89b4fa; color: #11111b; border: none;
-  padding: 8px 20px; border-radius: 6px; cursor: pointer;
-  font-size: 14px; font-weight: 600;
+.global-error {
+  margin-bottom: var(--space-4);
 }
-.save-btn:disabled { opacity: 0.5; cursor: default; }
-.save-btn:not(:disabled):hover { background: #b4d0fb; }
-.loading { text-align: center; color: #6c7086; padding: 48px; }
-.empty { text-align: center; color: #6c7086; padding: 24px; }
-.section { margin-bottom: 28px; }
-.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.section-header h3 { font-size: 16px; }
-.subtitle { color: #a6adc8; font-size: 13px; }
-.add-btn {
-  background: #313244; color: #a6e3a1; border: 1px solid #45475a;
-  padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
+.loading-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8) 0;
+  color: var(--color-text-muted);
 }
-.add-btn:hover { background: #45475a; }
-.add-btn.small { padding: 2px 8px; font-size: 12px; }
-
-.card {
-  background: #1e1e2e; border: 1px solid #313244;
-  border-radius: 8px; padding: 14px; margin-bottom: 12px;
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
 }
-.card-header { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
-.server-card {
-  background: #1e1e2e; border: 1px solid #313244;
-  border-radius: 8px; padding: 14px;
-  display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
-}
-.server-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #a6adc8; }
-.card-body { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-.card-body label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #a6adc8; }
-
-.input {
-  background: #11111b; border: 1px solid #313244; border-radius: 4px;
-  padding: 6px 10px; color: #cdd6f4; font-size: 13px;
-}
-.input:focus { outline: none; border-color: #89b4fa; }
-.name-input { width: 200px; }
-.short { width: 90px; }
-
-.del-btn {
-  background: none; border: 1px solid #f38ba8; color: #f38ba8;
-  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
-}
-.del-btn:hover { background: #f38ba8; color: #11111b; }
-.del-btn.small { padding: 2px 6px; font-size: 11px; }
-
-.ref-row {
-  display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
-  width: 100%; cursor: default; transition: background 0.15s;
-  padding: 4px; border-radius: 4px;
-}
-.ref-row.dragging { opacity: 0.4; }
-.ref-row.drag-over { background: #313244; }
-.drag-handle {
-  color: #6c7086; font-size: 16px; cursor: grab; user-select: none;
-  letter-spacing: 2px; padding: 0 2px;
-}
-.drag-handle:hover { color: #a6adc8; }
-.drag-handle:active { cursor: grabbing; }
-.priority-badge {
-  background: #313244; color: #a6adc8; font-size: 11px;
-  min-width: 22px; text-align: center; border-radius: 4px; padding: 2px 4px;
-}
-.flex-1 { flex: 1; }
-
-.cb-row {
-  display: flex; align-items: center; gap: 12px; padding: 6px 0;
-}
-.cb-name { font-size: 13px; min-width: 120px; }
-.cb-state {
-  font-size: 12px; padding: 2px 8px; border-radius: 4px;
-}
-.state-ok { background: #a6e3a122; color: #a6e3a1; }
-.state-warn { background: #f9e2af22; color: #f9e2af; }
-.state-error { background: #f38ba822; color: #f38ba8; }
-
-.toast {
-  position: fixed; bottom: 24px; right: 24px;
-  padding: 12px 24px; border-radius: 6px; font-size: 14px;
-}
-.toast.success { background: #a6e3a1; color: #11111b; }
-.toast.error { background: #f38ba8; color: #11111b; }
 </style>
