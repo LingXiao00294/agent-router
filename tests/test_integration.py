@@ -138,3 +138,42 @@ class TestRecordCall:
         calls, total = await store.list_calls(page=1, size=3)
         assert len(calls) == 3
         assert total == 5
+
+    @pytest.mark.asyncio
+    async def test_list_calls_status_filter(self, store):
+        await store.record(virtual_model="m", status="success")
+        await store.record(
+            virtual_model="m", status="error",
+            error_type="timeout", error_message="boom",
+        )
+        await store.record(virtual_model="m", status="success")
+
+        calls, total = await store.list_calls(status="error")
+        assert total == 1
+        assert all(c["status"] == "error" for c in calls)
+
+        calls, total = await store.list_calls(status="success")
+        assert total == 2
+        assert all(c["status"] == "success" for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_list_calls_model_status_combo(self, store):
+        await store.record(virtual_model="a", status="success")
+        await store.record(
+            virtual_model="a", status="error",
+            error_type="x", error_message="y",
+        )
+        await store.record(
+            virtual_model="b", status="error",
+            error_type="x", error_message="y",
+        )
+
+        calls, total = await store.list_calls(model="a", status="error")
+        assert total == 1
+        assert all(
+            c["virtual_model"] == "a" and c["status"] == "error" for c in calls
+        )
+
+        # 单独 model 过滤仍正常工作
+        _, total = await store.list_calls(model="b")
+        assert total == 1

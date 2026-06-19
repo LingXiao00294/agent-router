@@ -1,3 +1,5 @@
+import { request } from "./request";
+
 const BASE = "/api";
 
 export interface Summary {
@@ -62,77 +64,124 @@ export interface ModelStat {
   total_cost_usd: number;
 }
 
-export async function fetchSummary(): Promise<Summary> {
-  const res = await fetch(`${BASE}/metrics/summary`);
-  return res.json();
+export interface ProviderStat {
+  provider: string;
+  count: number;
+  success_count: number;
 }
 
-export async function fetchCalls(
+export interface DailyStat {
+  day: string;
+  count: number;
+  success_count: number;
+  cost_usd: number;
+}
+
+export interface ServerConfig {
+  host: string;
+  port: number;
+  log_level: string;
+  log_file: string;
+  log_max_bytes: number;
+  log_backup_count: number;
+}
+
+export interface RouterConfig {
+  failure_threshold: number;
+  recovery_timeout: number;
+}
+
+export interface ProviderConfig {
+  type: string;
+  base_url: string;
+  api_key: string;
+  timeout_seconds: number;
+  has_key?: boolean;
+  failure_threshold?: number | null;
+  recovery_timeout?: number | null;
+}
+
+export interface ModelRef {
+  provider: string;
+  model: string;
+  priority: number;
+}
+
+export interface AppConfig {
+  server: ServerConfig;
+  router: RouterConfig;
+  providers: Record<string, ProviderConfig>;
+  models: Record<string, ModelRef[]>;
+}
+
+export interface CircuitBreakerState {
+  status: "ok";
+  provider: string;
+}
+
+export function fetchSummary(): Promise<Summary> {
+  return request<Summary>(`${BASE}/metrics/summary`);
+}
+
+export function fetchCalls(
   page = 1,
   size = 50,
-  model = ""
+  model = "",
+  status = ""
 ): Promise<CallsPage> {
   const params = new URLSearchParams({ page: String(page), size: String(size) });
   if (model) params.set("model", model);
-  const res = await fetch(`${BASE}/calls?${params}`);
-  return res.json();
+  if (status) params.set("status", status);
+  return request<CallsPage>(`${BASE}/calls?${params}`);
 }
 
-export async function fetchCallDetail(id: string): Promise<CallRecord> {
-  const res = await fetch(`${BASE}/calls/${id}`);
-  return res.json();
+export function fetchCallDetail(id: string): Promise<CallRecord> {
+  return request<CallRecord>(`${BASE}/calls/${encodeURIComponent(id)}`);
 }
 
-export async function fetchByModel(): Promise<ModelStat[]> {
-  const res = await fetch(`${BASE}/metrics/by-model`);
-  return res.json();
+export function fetchByModel(): Promise<ModelStat[]> {
+  return request<ModelStat[]>(`${BASE}/metrics/by-model`);
 }
 
-export async function fetchByRealModel(): Promise<ModelStat[]> {
-  const res = await fetch(`${BASE}/metrics/by-real-model`);
-  return res.json();
+export function fetchByRealModel(): Promise<ModelStat[]> {
+  return request<ModelStat[]>(`${BASE}/metrics/by-real-model`);
 }
 
-export async function fetchDailyTrend(days = 30) {
-  const res = await fetch(`${BASE}/metrics/daily?days=${days}`);
-  return res.json();
+export function fetchByProvider(): Promise<ProviderStat[]> {
+  return request<ProviderStat[]>(`${BASE}/metrics/by-provider`);
 }
 
-export async function fetchConfig(): Promise<any> {
-  const res = await fetch(`${BASE}/config`);
-  return res.json();
+export function fetchDailyTrend(days = 30): Promise<DailyStat[]> {
+  return request<DailyStat[]>(`${BASE}/metrics/daily?days=${days}`);
 }
 
-export async function fetchConfigModels(): Promise<any> {
-  const res = await fetch(`${BASE}/config/models`);
-  return res.json();
+export function fetchConfig(): Promise<AppConfig> {
+  return request<AppConfig>(`${BASE}/config`);
 }
 
-export async function updateConfig(body: any): Promise<any> {
-  const res = await fetch(`${BASE}/config`, {
+export function fetchConfigModels(): Promise<Record<string, ModelRef[]>> {
+  return request<Record<string, ModelRef[]>>(`${BASE}/config/models`);
+}
+
+export function updateConfig(body: AppConfig): Promise<{ status: string; message: string }> {
+  return request<{ status: string; message: string }>(`${BASE}/config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const data = await res.json();
-    throw new Error(data.detail || "保存失败");
-  }
-  return res.json();
 }
 
-export async function fetchCircuitBreakerStates(): Promise<Record<string, string>> {
-  const res = await fetch(`${BASE}/circuit-breaker`);
-  return res.json();
+export function fetchCircuitBreakerStates(): Promise<Record<string, string>> {
+  return request<Record<string, string>>(`${BASE}/circuit-breaker`);
 }
 
-export async function resetCircuitBreaker(provider: string): Promise<any> {
-  const res = await fetch(`${BASE}/circuit-breaker/${encodeURIComponent(provider)}/reset`, {
-    method: "POST",
-  });
-  if (!res.ok) {
-    const data = await res.json();
-    throw new Error(data.detail || "重置失败");
-  }
-  return res.json();
+export function resetCircuitBreaker(provider: string): Promise<CircuitBreakerState> {
+  return request<CircuitBreakerState>(
+    `${BASE}/circuit-breaker/${encodeURIComponent(provider)}/reset`,
+    { method: "POST" }
+  );
+}
+
+export function fetchModels(): Promise<{ data: { id: string; type: string; display_name: string; created_at: string }[] }> {
+  return request("/v1/models");
 }

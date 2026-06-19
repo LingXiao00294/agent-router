@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 
 import httpx
 import pytest
 from agent_router.config import ProviderConfig
 from agent_router.providers.anthropic_compat import AnthropicCompatProvider
-from agent_router.providers.base import NonRetryableError, RetryableError
+from agent_router.providers.base import RetryableError
 
 
 @pytest.fixture
@@ -57,32 +56,40 @@ class TestAnthropicCompatProvider:
         assert headers["Authorization"] == "Bearer not-anthropic-key-format"
 
     @pytest.mark.asyncio
-    async def test_send_retryable_429(self, http_client):
+    async def test_send_retryable_429(self):
         """测试 HTTP 429 触发可重试错误."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(429, text="rate limited")
+        )
         config = ProviderConfig(
             type="anthropic",
             model="test",
             api_key="sk-test",
-            base_url="https://httpstat.us",
+            base_url="https://api.example.com",
             priority=1,
         )
-        provider = AnthropicCompatProvider(config, http_client)
-        with pytest.raises(RetryableError):
-            await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+        async with httpx.AsyncClient(transport=transport) as client:
+            provider = AnthropicCompatProvider(config, client)
+            with pytest.raises(RetryableError):
+                await provider.send({"model": "test", "max_tokens": 10, "messages": []})
 
     @pytest.mark.asyncio
-    async def test_send_retryable_401(self, http_client):
+    async def test_send_retryable_401(self):
         """测试 HTTP 401 (鉴权失败) 触发可重试错误，允许路由切换 provider."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(401, text="unauthorized")
+        )
         config = ProviderConfig(
             type="anthropic",
             model="test",
             api_key="invalid",
-            base_url="https://api.anthropic.com",
+            base_url="https://api.example.com",
             priority=1,
         )
-        provider = AnthropicCompatProvider(config, http_client)
-        with pytest.raises(RetryableError):
-            await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+        async with httpx.AsyncClient(transport=transport) as client:
+            provider = AnthropicCompatProvider(config, client)
+            with pytest.raises(RetryableError):
+                await provider.send({"model": "test", "max_tokens": 10, "messages": []})
 
     def test_strip_trailing_slash(self):
         config = ProviderConfig(

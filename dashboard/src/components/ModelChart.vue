@@ -1,144 +1,97 @@
 <template>
-  <div class="charts-row">
-    <div class="chart-container">
-      <h3>模型分布 (实际)</h3>
-      <div ref="modelRef" class="chart"></div>
-    </div>
-    <div class="chart-container">
-      <h3>Token 用量</h3>
-      <div ref="tokenRef" class="chart"></div>
-    </div>
+  <div class="model-charts-row">
+    <ChartPanel
+      title="模型分布"
+      subtitle="按真实模型调用次数"
+      :option="pieOption"
+      :loading="loading"
+      :empty="!loading && data.length === 0"
+      empty-description="暂无模型分布数据"
+    />
+    <ChartPanel
+      title="Token 用量"
+      subtitle="输入 / 输出"
+      :option="barOption"
+      :loading="loading"
+      :empty="!loading && data.length === 0"
+      empty-description="暂无 Token 用量数据"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
-import * as echarts from "echarts";
-import { fetchByRealModel } from "../api";
+import { computed } from "vue";
+import type { EChartsOption } from "echarts";
+import ChartPanel from "./ChartPanel.vue";
+import type { ModelStat } from "../api";
 
-const modelRef = ref<HTMLDivElement>();
-const tokenRef = ref<HTMLDivElement>();
-let modelChart: echarts.ECharts | null = null;
-let tokenChart: echarts.ECharts | null = null;
+const props = defineProps<{
+  data: ModelStat[];
+  loading?: boolean;
+}>();
 
-async function load() {
-  let data;
-  try {
-    data = await fetchByRealModel();
-  } catch {
-    return;
-  }
-  if (!data.length) return;
+const colors = ["#89b4fa", "#a6e3a1", "#fab387", "#f38ba8", "#cba6f7", "#89dceb"];
 
-  const colors = ["#89b4fa", "#a6e3a1", "#fab387", "#f38ba8", "#cba6f7"];
+const pieOption = computed<EChartsOption>(() => ({
+  tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+  series: [
+    {
+      type: "pie",
+      radius: ["40%", "70%"],
+      center: ["50%", "55%"],
+      data: props.data.map((d, i) => ({
+        name: d.model || d.virtual_model || "未知",
+        value: d.count,
+        itemStyle: { color: colors[i % colors.length] },
+      })),
+      label: { fontSize: 11 },
+    },
+  ],
+}));
 
-  // 模型分布饼图
-  if (modelRef.value) {
-    if (!modelChart) {
-      modelChart = echarts.init(modelRef.value, undefined, { renderer: "canvas" });
-    }
-    modelChart.setOption({
-      tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
-      series: [
-        {
-          type: "pie",
-          radius: ["40%", "70%"],
-          center: ["50%", "55%"],
-          data: data.map((d: any, i: number) => ({
-            name: d.model,
-            value: d.count,
-            itemStyle: { color: colors[i % colors.length] },
-          })),
-          label: { color: "#a6adc8", fontSize: 11 },
-        },
-      ],
-    });
-  }
-
-  // Token 用量柱状图
-  if (tokenRef.value) {
-    if (!tokenChart) {
-      tokenChart = echarts.init(tokenRef.value, undefined, { renderer: "canvas" });
-    }
-    tokenChart.setOption({
-      tooltip: { trigger: "axis" },
-      grid: { left: 55, right: 20, top: 10, bottom: 30 },
-      xAxis: {
-        type: "category",
-        data: data.map((d: any) => d.model),
-        axisLabel: { color: "#a6adc8", fontSize: 10 },
-        axisLine: { lineStyle: { color: "#313244" } },
-      },
-      yAxis: {
-        type: "value",
-        name: "tokens",
-        axisLabel: {
-          color: "#a6adc8",
-          formatter: (v: number) => (v >= 1000 ? (v / 1000).toFixed(0) + "K" : String(v)),
-        },
-        splitLine: { lineStyle: { color: "#313244" } },
-      },
-      series: [
-        {
-          name: "输入",
-          type: "bar",
-          stack: "tokens",
-          data: data.map((d: any) => d.total_input_tokens || 0),
-          itemStyle: { color: "#89b4fa" },
-        },
-        {
-          name: "输出",
-          type: "bar",
-          stack: "tokens",
-          data: data.map((d: any) => d.total_output_tokens || 0),
-          itemStyle: { color: "#a6e3a1" },
-        },
-      ],
-    });
-  }
-}
-
-function onResize() {
-  modelChart?.resize();
-  tokenChart?.resize();
-}
-
-onMounted(() => {
-  load();
-  window.addEventListener("resize", onResize);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("resize", onResize);
-  modelChart?.dispose();
-  tokenChart?.dispose();
-});
+const barOption = computed<EChartsOption>(() => ({
+  tooltip: { trigger: "axis" },
+  grid: { left: 55, right: 20, top: 10, bottom: 30 },
+  xAxis: {
+    type: "category",
+    data: props.data.map((d) => d.model || d.virtual_model || "未知"),
+    axisLabel: { fontSize: 10, rotate: props.data.length > 8 ? 30 : 0 },
+  },
+  yAxis: {
+    type: "value",
+    name: "tokens",
+    axisLabel: {
+      formatter: (v: number) => (v >= 1000 ? (v / 1000).toFixed(0) + "K" : String(v)),
+    },
+  },
+  series: [
+    {
+      name: "输入",
+      type: "bar",
+      stack: "tokens",
+      data: props.data.map((d) => d.total_input_tokens || 0),
+      itemStyle: { color: "#89b4fa" },
+    },
+    {
+      name: "输出",
+      type: "bar",
+      stack: "tokens",
+      data: props.data.map((d) => d.total_output_tokens || 0),
+      itemStyle: { color: "#a6e3a1" },
+    },
+  ],
+}));
 </script>
 
 <style scoped>
-.charts-row {
+.model-charts-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.chart-container {
-  background: #1e1e2e;
-  border: 1px solid #313244;
-  border-radius: 8px;
-  padding: 16px;
-}
-h3 {
-  margin: 0 0 8px;
-  color: #cdd6f4;
-  font-size: 15px;
-}
-.chart {
-  width: 100%;
-  height: 250px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 @media (max-width: 900px) {
-  .charts-row {
+  .model-charts-row {
     grid-template-columns: 1fr;
   }
 }

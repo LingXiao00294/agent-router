@@ -1,110 +1,134 @@
 <template>
-  <div class="chart-container">
-    <h3>调用趋势 (近 30 天)</h3>
-    <div ref="chartRef" class="chart"></div>
+  <div class="trend-section">
+    <div class="trend-header">
+      <div class="trend-tabs">
+        <button
+          v-for="d in daysOptions"
+          :key="d"
+          class="tab-btn"
+          :class="{ active: days === d }"
+          @click="$emit('update:days', d)"
+        >
+          近 {{ d }} 天
+        </button>
+      </div>
+      <UiButton size="sm" variant="ghost" @click="exportPng">
+        <template #icon>⬇</template>
+        导出
+      </UiButton>
+    </div>
+    <ChartPanel
+      ref="chartPanelRef"
+      title="调用趋势"
+      :subtitle="`近 ${days} 天`"
+      :option="option"
+      :loading="loading"
+      :empty="!loading && data.length === 0"
+      empty-description="该时间范围内没有调用记录"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
-import * as echarts from "echarts";
-import { fetchDailyTrend } from "../api";
+import { computed, ref } from "vue";
+import type { EChartsOption } from "echarts";
+import ChartPanel from "./ChartPanel.vue";
+import UiButton from "./ui/UiButton.vue";
+import type { DailyStat } from "../api";
 
-const chartRef = ref<HTMLDivElement>();
-let chart: echarts.ECharts | null = null;
+const props = defineProps<{
+  data: DailyStat[];
+  days: number;
+  loading?: boolean;
+}>();
 
-async function load() {
-  let data;
-  try {
-    data = await fetchDailyTrend(30);
-  } catch {
-    return;
-  }
-  if (!chartRef.value) return;
-  if (!chart) {
-    chart = echarts.init(chartRef.value, undefined, { renderer: "canvas" });
-  }
-  chart.setOption({
-    tooltip: { trigger: "axis" },
-    legend: { data: ["调用总数", "成功", "费用"], textStyle: { color: "#a6adc8" } },
-    grid: { left: 50, right: 60, top: 20, bottom: 30 },
-    xAxis: {
-      type: "category",
-      data: data.map((d: any) => d.day),
-      axisLine: { lineStyle: { color: "#313244" } },
-      axisLabel: { color: "#a6adc8", fontSize: 11 },
+defineEmits<{
+  (e: "update:days", days: number): void;
+}>();
+
+const daysOptions = [7, 30, 90];
+const chartPanelRef = ref<InstanceType<typeof ChartPanel> | null>(null);
+
+const option = computed<EChartsOption>(() => ({
+  tooltip: { trigger: "axis" },
+  legend: { data: ["调用总数", "成功", "费用"] },
+  grid: { left: 50, right: 60, top: 30, bottom: 30 },
+  xAxis: {
+    type: "category",
+    data: props.data.map((d) => d.day),
+  },
+  yAxis: [
+    { type: "value", name: "次数" },
+    { type: "value", name: "USD" },
+  ],
+  series: [
+    {
+      name: "调用总数",
+      type: "bar",
+      data: props.data.map((d) => d.count),
+      itemStyle: { color: "#89b4fa" },
     },
-    yAxis: [
-      {
-        type: "value",
-        name: "次数",
-        nameTextStyle: { color: "#a6adc8" },
-        axisLabel: { color: "#a6adc8" },
-        splitLine: { lineStyle: { color: "#313244" } },
-      },
-      {
-        type: "value",
-        name: "USD",
-        nameTextStyle: { color: "#a6adc8" },
-        axisLabel: { color: "#a6adc8" },
-        splitLine: { show: false },
-      },
-    ],
-    series: [
-      {
-        name: "调用总数",
-        type: "bar",
-        data: data.map((d: any) => d.count),
-        itemStyle: { color: "#89b4fa" },
-      },
-      {
-        name: "成功",
-        type: "bar",
-        data: data.map((d: any) => d.success_count),
-        itemStyle: { color: "#a6e3a1" },
-      },
-      {
-        name: "费用",
-        type: "line",
-        yAxisIndex: 1,
-        data: data.map((d: any) => +(d.cost_usd || 0).toFixed(4)),
-        lineStyle: { color: "#fab387" },
-        itemStyle: { color: "#fab387" },
-      },
-    ],
-  });
+    {
+      name: "成功",
+      type: "bar",
+      data: props.data.map((d) => d.success_count),
+      itemStyle: { color: "#a6e3a1" },
+    },
+    {
+      name: "费用",
+      type: "line",
+      yAxisIndex: 1,
+      data: props.data.map((d) => +(d.cost_usd || 0).toFixed(4)),
+      itemStyle: { color: "#fab387" },
+      lineStyle: { color: "#fab387" },
+    },
+  ],
+}));
+
+function exportPng() {
+  const url = chartPanelRef.value?.exportImage();
+  if (!url) return;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `trend-${props.days}d.png`;
+  a.click();
 }
-
-function onResize() {
-  chart?.resize();
-}
-
-onMounted(() => {
-  load();
-  window.addEventListener("resize", onResize);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("resize", onResize);
-  chart?.dispose();
-});
 </script>
 
 <style scoped>
-.chart-container {
-  background: #1e1e2e;
-  border: 1px solid #313244;
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 24px;
+.trend-section {
+  margin-bottom: var(--space-6);
 }
-h3 {
-  margin: 0 0 8px;
-  color: #cdd6f4;
-  font-size: 15px;
+.trend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
-.chart {
-  width: 100%;
-  height: 280px;
+.trend-tabs {
+  display: flex;
+  gap: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1);
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  transition: all var(--transition-fast);
+}
+.tab-btn:hover {
+  color: var(--color-text-default);
+}
+.tab-btn.active {
+  background: var(--color-primary);
+  color: var(--color-crust);
 }
 </style>
