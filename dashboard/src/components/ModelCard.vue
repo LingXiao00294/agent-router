@@ -39,6 +39,8 @@
         @remove="$emit('remove-ref', idx)"
         @touch-provider="touchProvider(idx)"
         @touch-model="touchModel(idx)"
+        @dragstart="onRefDragStart(idx)"
+        @drop="onRefDrop(idx)"
       />
 
       <p v-if="refsError" class="refs-error">{{ refsError }}</p>
@@ -47,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import type { ModelEntry } from "../stores/config";
 import UiCard from "./ui/UiCard.vue";
 import UiInput from "./ui/UiInput.vue";
@@ -86,6 +89,20 @@ function touchProvider(idx: number) {
 }
 function touchModel(idx: number) {
   emit("touch-model", idx);
+}
+
+// 拖拽排序：RefRow 内部已处理视觉反馈并 emit dragstart/drop，
+// 这里记录被拖源行 index，drop 到目标行时触发 move-ref 重排。
+const draggedIdx = ref<number | null>(null);
+
+function onRefDragStart(idx: number) {
+  draggedIdx.value = idx;
+}
+function onRefDrop(idx: number) {
+  if (draggedIdx.value !== null && draggedIdx.value !== idx) {
+    emit("move-ref", draggedIdx.value, idx);
+  }
+  draggedIdx.value = null;
 }
 </script>
 
