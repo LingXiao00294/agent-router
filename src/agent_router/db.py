@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,13 +121,18 @@ class CallStore:
         return dict(row) if row else None
 
     async def list_calls(
-        self, page: int = 1, size: int = 50, model: str | None = None
+        self, page: int = 1, size: int = 50, model: str | None = None, status: str | None = None
     ) -> tuple[list[dict], int]:
-        where = ""
+        conditions: list[str] = []
         params: list[Any] = []
         if model:
-            where = "WHERE virtual_model = ?"
+            conditions.append("virtual_model = ?")
             params.append(model)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         count_row = await self._conn.execute_fetchall(
             f"SELECT COUNT(*) FROM calls {where}", params
