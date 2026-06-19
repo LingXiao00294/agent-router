@@ -150,7 +150,6 @@
 import { onMounted, onUnmounted } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import { useConfigStore } from "../stores/config";
-import { useAppStore } from "../stores/app";
 import { useConfirm } from "../composables/useConfirm";
 import { useToast } from "../composables/useToast";
 import PageHeader from "../components/PageHeader.vue";
@@ -166,7 +165,6 @@ import UiSpinner from "../components/ui/UiSpinner.vue";
 import UiErrorBanner from "../components/ui/UiErrorBanner.vue";
 
 const configStore = useConfigStore();
-const app = useAppStore();
 const { confirm } = useConfirm();
 const toast = useToast();
 
@@ -235,7 +233,6 @@ onBeforeRouteLeave(async (_to, _from, next) => {
 });
 
 onMounted(() => {
-  app.loadTheme();
   configStore.loadConfig();
   document.addEventListener("keydown", onKeydown);
 });

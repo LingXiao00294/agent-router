@@ -60,7 +60,6 @@ import { useRoute, useRouter } from "vue-router";
 import { useMetricsStore } from "../stores/metrics";
 import { useCallsStore } from "../stores/calls";
 import { useAutoRefreshStore } from "../stores/autoRefresh";
-import { useAppStore } from "../stores/app";
 import { useToast } from "../composables/useToast";
 import PageHeader from "../components/PageHeader.vue";
 import StatsCards from "../components/StatsCards.vue";
@@ -76,7 +75,6 @@ import UiErrorBanner from "../components/ui/UiErrorBanner.vue";
 const metrics = useMetricsStore();
 const calls = useCallsStore();
 const autoRefresh = useAutoRefreshStore();
-const app = useAppStore();
 const toast = useToast();
 const route = useRoute();
 const router = useRouter();
@@ -158,8 +156,6 @@ watch(trendDays, () => {
 let unregisterRefresh: (() => void) | null = null;
 
 onMounted(() => {
-  app.loadTheme();
-
   if (route.query.model && typeof route.query.model === "string") {
     calls.filterModel = route.query.model;
   }

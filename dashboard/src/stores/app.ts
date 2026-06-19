@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { usePreferredDark } from "@vueuse/core";
 
 type ThemeMode = "dark" | "light" | "system";
@@ -31,6 +31,9 @@ export const useAppStore = defineStore("app", () => {
   function applyTheme() {
     document.documentElement.setAttribute("data-theme", resolvedTheme.value);
   }
+
+  // system 模式下，OS 深/浅色变化时自动跟随（setTheme/loadTheme 已各自立即应用一次）
+  watch(resolvedTheme, applyTheme);
 
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value;

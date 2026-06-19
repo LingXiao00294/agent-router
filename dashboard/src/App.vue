@@ -10,17 +10,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import ToastProvider from "./components/ui/ToastProvider.vue";
 import UiConfirm from "./components/ui/UiConfirm.vue";
 import { useAppStore } from "./stores/app";
 
 const app = useAppStore();
-
-onMounted(() => {
-  app.loadTheme();
-});
 </script>
 
 <style scoped>
