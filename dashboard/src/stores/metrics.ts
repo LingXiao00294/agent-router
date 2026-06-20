@@ -19,6 +19,7 @@ export const useMetricsStore = defineStore("metrics", () => {
   const byProvider = ref<ProviderStat[]>([]);
   const dailyTrend = ref<DailyStat[]>([]);
   const loading = ref(false);
+  const refreshing = ref(false);
   const error = ref<string | null>(null);
   const lastUpdated = ref<Date | null>(null);
 
@@ -44,8 +45,10 @@ export const useMetricsStore = defineStore("metrics", () => {
     dailyTrend.value = await fetchDailyTrend(days);
   }
 
-  async function loadAll(days = 30) {
-    loading.value = true;
+  async function loadAll(days = 30, options: { silent?: boolean } = {}) {
+    const silent = options.silent ?? hasData.value;
+    if (!silent) loading.value = true;
+    refreshing.value = true;
     error.value = null;
     try {
       await Promise.all([
@@ -61,6 +64,7 @@ export const useMetricsStore = defineStore("metrics", () => {
       throw err;
     } finally {
       loading.value = false;
+      refreshing.value = false;
     }
   }
 
@@ -81,6 +85,7 @@ export const useMetricsStore = defineStore("metrics", () => {
     byProvider,
     dailyTrend,
     loading,
+    refreshing,
     error,
     lastUpdated,
     hasData,

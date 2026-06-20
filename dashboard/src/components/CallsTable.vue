@@ -9,7 +9,7 @@
     />
 
     <div class="table-scroll">
-      <table v-if="!loading && calls.length">
+      <table v-if="calls.length">
         <thead>
           <tr>
             <th>时间</th>

@@ -3,7 +3,7 @@
     <PageHeader title="仪表盘" subtitle="实时监控路由调用与模型状态">
       <template #actions>
         <AutoRefreshControl />
-        <UiButton variant="primary" :loading="metrics.loading || calls.loading" @click="refresh">
+        <UiButton variant="primary" :loading="metrics.refreshing || calls.refreshing" @click="refresh">
           <template #icon>↻</template>
           刷新
         </UiButton>
@@ -114,9 +114,12 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-async function refresh() {
+async function refresh(silent = false) {
   try {
-    await Promise.all([metrics.loadAll(trendDays.value), calls.loadCalls()]);
+    await Promise.all([
+      metrics.loadAll(trendDays.value, { silent }),
+      calls.loadCalls({ silent }),
+    ]);
   } catch {
     // errors handled by stores
   }
@@ -165,7 +168,7 @@ onMounted(() => {
 
   refresh();
   autoRefresh.start();
-  unregisterRefresh = autoRefresh.register(refresh);
+  unregisterRefresh = autoRefresh.register(() => refresh(true));
   document.addEventListener("keydown", onKeydown);
 });
 
