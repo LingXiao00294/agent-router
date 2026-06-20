@@ -1,50 +1,65 @@
-# 最小启动配置 — 可直接启动后再通过 dashboard 配置 provider 和模型
-
 [server]
 host = "127.0.0.1"
 port = 9456
 log_level = "info"
-# 注意：stdout 固定输出 INFO 及以上（避免 httpcore/aiosqlite 等 DEBUG 噪音刷屏）；
-# 设为 "debug" 时 DEBUG 级别仅写入下方文件，不进 stdout。
-# 运行日志：stdout 输出彩色简洁单行，文件输出全量 JSON（轮转）
-log_file = "logs/agent-router.log"   # 留空则只输出到 stdout
-log_max_bytes = 10000000             # 单文件最大字节数（默认 10MB）
-log_backup_count = 5                 # 保留的历史日志份数
+log_file = "logs/agent-router.log"
+log_max_bytes = 10000000
+log_backup_count = 5
 
-# 路由/熔断器参数
 [router]
-failure_threshold = 5       # 连续失败多少次后熔断该 provider
-recovery_timeout = 600      # 熔断后等待多少秒进入半开探测 (默认 10 分钟)
+failure_threshold = 5
+recovery_timeout = 600
 
-# ============================================================
-# Provider 定义 — 每个 provider 只需配置一次
-#   取消注释并填入你的 provider 信息
-# ============================================================
-# [providers.<your-provider>]
-# type = "anthropic"
-# api_key = "${YOUR_API_KEY_ENV}"
-# base_url = "https://your-api-endpoint"
+[providers.zai]
+type = "anthropic"
+api_key = "${ZAI_API_KEY}"
+base_url = "https://api.z.ai/api/anthropic"
+timeout_seconds = 120
 
-# [providers.<your-provider2>]
-# type = "anthropic"
-# api_key = "${YOUR_API_KEY_ENV}"
-# base_url = "https://your-api-endpoint"
+[providers.deepseek]
+type = "anthropic"
+api_key = "${DEEPSEEK_API_KEY}"
+base_url = "https://api.deepseek.com/anthropic"
+timeout_seconds = 120
 
-# ============================================================
-# 虚拟模型 — 引用 provider + 真实模型名 + 优先级
-#   优先级越小越优先，同一模型可配置多个 provider 做故障转移
-# ============================================================
-# [[models.opus-router]]
-# provider = "<your-provider>"
-# model = "<real-model-name>"
-# priority = 1
+[providers."mimo token plan"]
+type = "anthropic"
+api_key = "${MIMO_API_KEY}"
+base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
+timeout_seconds = 120
 
-# [[models.sonnet-router]]
-# provider = "<your-provider>"
-# model = "<real-model-name>"
-# priority = 1
+[[models.opus-router]]
+provider = "mimo token plan"
+model = "mimo-v2.5-pro"
+priority = 1
 
-# [[models.haiku-router]]
-# provider = "<your-provider>"
-# model = "<real-model-name>"
-# priority = 1
+[[models.opus-router]]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+priority = 2
+
+[[models.opus-router]]
+provider = "zai"
+model = "glm-5.2"
+priority = 3
+
+[[models.sonnet-router]]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+priority = 1
+
+[[models.sonnet-router]]
+provider = "mimo-token-plan"
+model = "mimo-v2.5"
+priority = 2
+
+[[models.haiku-router]]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+priority = 1
+
+[[models.haiku-router]]
+provider = "mimo token plan"
+model = "mimo-v2.5"
+priority = 2
+
