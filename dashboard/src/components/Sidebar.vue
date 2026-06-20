@@ -1,7 +1,11 @@
 <template>
   <aside
     class="sidebar"
-    :class="{ collapsed: app.sidebarCollapsed, 'is-compact': app.sidebarIsCompact }"
+    :class="{
+      collapsed: app.sidebarCollapsed,
+      'is-compact': app.sidebarIsCompact,
+      'is-mobile': app.sidebarIsMobile,
+    }"
     @transitionend="app.onSidebarTransitionEnd"
   >
     <div class="sidebar-inner">
@@ -35,6 +39,7 @@
           <span class="nav-text sidebar-label">{{ themeLabel }}</span>
         </button>
         <button
+          v-if="!app.sidebarIsMobile"
           class="footer-btn collapse-btn"
           :aria-label="app.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
           :title="app.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
@@ -99,7 +104,8 @@ function cycleTheme() {
   overflow: hidden;
   transition: width var(--sidebar-ease);
 }
-.sidebar.collapsed {
+.sidebar.collapsed,
+.sidebar.is-compact {
   width: var(--sidebar-collapsed-width);
 }
 
@@ -328,6 +334,9 @@ function cycleTheme() {
     grid-template-rows var(--sidebar-ease),
     gap var(--sidebar-ease),
     padding var(--sidebar-ease);
+}
+.sidebar.is-compact.is-mobile .footer {
+  grid-template-rows: var(--sidebar-hit-size);
 }
 .sidebar.is-compact .footer {
   grid-template-columns: 1fr;

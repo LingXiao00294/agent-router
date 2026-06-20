@@ -44,8 +44,6 @@ onMounted(() => {
 
 @media (max-width: 768px) {
   .main-area {
-    margin-left: var(--sidebar-collapsed-width);
-    max-width: calc(100vw - var(--sidebar-collapsed-width));
     padding: var(--space-4);
   }
 }

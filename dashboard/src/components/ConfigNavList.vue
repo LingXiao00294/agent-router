@@ -20,7 +20,14 @@
         >
           ⋮⋮
         </span>
-        <router-link :to="item.to" class="nav-item nav-sub-item" active-class="active" draggable="false">
+        <router-link
+          :to="item.to"
+          class="nav-item nav-sub-item"
+          active-class="active"
+          draggable="false"
+          :title="item.label"
+          :aria-label="item.label"
+        >
           <ConfigNavIcon :id="item.id" />
           <span class="nav-text sidebar-label">{{ item.label }}</span>
         </router-link>

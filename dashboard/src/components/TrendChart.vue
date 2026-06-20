@@ -51,23 +51,24 @@ const daysOptions = [7, 30, 90];
 const chartPanelRef = ref<InstanceType<typeof ChartPanel> | null>(null);
 const { categoryAxis, valueAxis } = useChartTheme();
 
-function formatDayLocal(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+/** 与后端 SQLite DATE(timestamp)（UTC）对齐 */
+function formatDayUtc(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
 function fillDailyTrend(data: DailyStat[], days: number): DailyStat[] {
   const map = new Map(data.map((d) => [d.day.slice(0, 10), d]));
   const end = new Date();
-  end.setHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
   const filled: DailyStat[] = [];
 
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(end);
-    d.setDate(d.getDate() - i);
-    const key = formatDayLocal(d);
+    d.setUTCDate(d.getUTCDate() - i);
+    const key = formatDayUtc(d);
     const row = map.get(key);
     filled.push(
       row ?? {

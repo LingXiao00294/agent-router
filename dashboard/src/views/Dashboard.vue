@@ -3,7 +3,7 @@
     <PageHeader title="仪表盘" subtitle="实时监控路由调用与模型状态">
       <template #actions>
         <AutoRefreshControl />
-        <UiButton variant="primary" :loading="metrics.refreshing || calls.refreshing" @click="refresh">
+        <UiButton variant="primary" :loading="metrics.refreshing || calls.refreshing" @click="() => refresh()">
           <template #icon>↻</template>
           刷新
         </UiButton>

@@ -6,7 +6,7 @@ export interface ListDragReorderOptions {
   itemSelector?: string;
 }
 
-function computeMoveTarget(from: number, hover: number, insertAfter: boolean): number {
+export function computeMoveTarget(from: number, hover: number, insertAfter: boolean): number {
   let to = insertAfter ? hover + 1 : hover;
   if (from < to) to -= 1;
   return to;
@@ -39,20 +39,26 @@ export function useListDragReorder(options: ListDragReorderOptions) {
     if (!draggedId.value) return;
 
     const target = findHoverTarget(clientX, clientY);
-    if (!target || target.id === draggedId.value) return;
+    if (!target || target.id === draggedId.value) {
+      dragOverIdx.value = null;
+      return;
+    }
 
     const hoverIdx = options.findIndex(target.id);
     if (hoverIdx === -1) return;
 
+    const rect = target.el.getBoundingClientRect();
+    insertAfter.value = clientY >= rect.top + rect.height / 2;
+    dragOverIdx.value = hoverIdx;
+  }
+
+  function commitReorder() {
+    if (!draggedId.value || dragOverIdx.value === null) return;
+
     const fromIdx = options.findIndex(draggedId.value);
     if (fromIdx === -1) return;
 
-    const rect = target.el.getBoundingClientRect();
-    const after = clientY >= rect.top + rect.height / 2;
-    insertAfter.value = after;
-    dragOverIdx.value = hoverIdx;
-
-    const to = computeMoveTarget(fromIdx, hoverIdx, after);
+    const to = computeMoveTarget(fromIdx, dragOverIdx.value, insertAfter.value);
     if (to !== fromIdx) {
       options.reorder(fromIdx, to);
     }
@@ -66,6 +72,7 @@ export function useListDragReorder(options: ListDragReorderOptions) {
 
   function onPointerUp(e: PointerEvent) {
     if (activePointerId !== e.pointerId) return;
+    commitReorder();
     cleanupListeners();
     resetDragState();
   }

@@ -72,7 +72,7 @@ export const useAppStore = defineStore("app", () => {
   return {
     themeMode,
     sidebarCollapsed: sidebar.collapsed,
-    sidebarTransitioning: sidebar.transitioning,
+    sidebarIsMobile: sidebar.isMobile,
     sidebarIsCompact: sidebar.isCompact,
     sidebarCurrentWidth: sidebar.currentWidth,
     onSidebarTransitionEnd: sidebar.onTransitionEnd,

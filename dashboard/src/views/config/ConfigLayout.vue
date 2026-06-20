@@ -53,6 +53,7 @@ const pageSubtitle = computed(() => {
 });
 
 async function save() {
+  if (!configStore.isDirty || configStore.saving) return;
   try {
     const ok = await configStore.saveConfig();
     if (ok) {
@@ -66,7 +67,7 @@ async function save() {
 function onKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    if (!configStore.saving) save();
+    save();
   }
 }
 
