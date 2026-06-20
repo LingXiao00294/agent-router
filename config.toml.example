@@ -49,7 +49,7 @@ model = "deepseek-v4-flash"
 priority = 1
 
 [[models.sonnet-router]]
-provider = "mimo-token-plan"
+provider = "mimo token plan"
 model = "mimo-v2.5"
 priority = 2
 
