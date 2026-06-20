@@ -1,0 +1,11 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9456",
+    "ANTHROPIC_AUTH_TOKEN": "dummy",
+    "ANTHROPIC_MODEL": "opus-router",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-router",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-router",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-router",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus-router",
+  }
+}

@@ -21,6 +21,7 @@ calls.db
 # Runtime logs
 logs/
 
+.claude/settings.json
+.claude/worktrees/
 
-.claude
 TODO.md

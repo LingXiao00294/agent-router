@@ -10,6 +10,7 @@ export const useCallsStore = defineStore("calls", () => {
   const filterModel = ref("");
   const filterStatus = ref("");
   const loading = ref(false);
+  const refreshing = ref(false);
   const error = ref<string | null>(null);
   const detail = ref<CallRecord | null>(null);
   const detailLoading = ref(false);
@@ -17,8 +18,10 @@ export const useCallsStore = defineStore("calls", () => {
 
   const pages = computed(() => Math.max(1, Math.ceil(total.value / size.value)));
 
-  async function loadCalls() {
-    loading.value = true;
+  async function loadCalls(options: { silent?: boolean } = {}) {
+    const silent = options.silent ?? calls.value.length > 0;
+    if (!silent) loading.value = true;
+    refreshing.value = true;
     error.value = null;
     try {
       const data: CallsPage = await fetchCalls(
@@ -34,6 +37,7 @@ export const useCallsStore = defineStore("calls", () => {
       throw err;
     } finally {
       loading.value = false;
+      refreshing.value = false;
     }
   }
 
@@ -99,6 +103,7 @@ export const useCallsStore = defineStore("calls", () => {
     filterModel,
     filterStatus,
     loading,
+    refreshing,
     error,
     detail,
     detailLoading,

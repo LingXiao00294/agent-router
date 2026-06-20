@@ -1,6 +1,6 @@
 <template>
   <UiCard class="chart-panel" :title="title" :subtitle="subtitle">
-    <div v-if="loading" class="chart-loading">
+    <div v-if="loading && empty" class="chart-loading">
       <UiSkeleton variant="rect" class="skeleton-chart" />
     </div>
     <UiEmpty
@@ -89,7 +89,10 @@ const mergedOption = computed<EChartsOption>(() =>
 
 function initChart() {
   if (!chartRef.value) return;
-  chart = echarts.init(chartRef.value, undefined, { renderer: "canvas" });
+  chart = echarts.init(chartRef.value, undefined, {
+    renderer: "canvas",
+    devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+  });
   chart.setOption(mergedOption.value, true);
 }
 
@@ -101,7 +104,7 @@ function disposeChart() {
 }
 
 onMounted(() => {
-  if (!props.loading && !props.empty) {
+  if (!props.empty) {
     initChart();
   }
 });
@@ -115,9 +118,9 @@ useResizeObserver(chartRef, () => {
 watch(
   () => [props.loading, props.empty] as const,
   ([loading, empty]) => {
-    if (loading || empty) {
+    if (loading && empty) {
       disposeChart();
-    } else if (!chart && chartRef.value) {
+    } else if (!chart && chartRef.value && !empty) {
       initChart();
     }
   }

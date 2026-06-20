@@ -18,6 +18,7 @@ export function useChartTheme() {
     backgroundColor: "transparent",
     textStyle: {
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      color: colors.value.textSecondary,
     },
     title: {
       textStyle: { color: colors.value.text },
@@ -33,18 +34,24 @@ export function useChartTheme() {
       textStyle: { color: colors.value.text },
       extraCssText: "border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.16);",
     },
-    grid: { borderColor: colors.value.grid },
-    xAxis: {
-      axisLine: { lineStyle: { color: colors.value.grid } },
-      axisLabel: { color: colors.value.textSecondary },
-      splitLine: { lineStyle: { color: colors.value.grid } },
-    },
-    yAxis: {
-      axisLine: { lineStyle: { color: colors.value.grid } },
-      axisLabel: { color: colors.value.textSecondary },
-      splitLine: { lineStyle: { color: colors.value.grid } },
+  }));
+
+  const categoryAxis = computed(() => ({
+    axisLine: { lineStyle: { color: colors.value.grid } },
+    axisTick: { alignWithLabel: true, lineStyle: { color: colors.value.grid } },
+    axisLabel: { color: colors.value.textSecondary },
+    splitLine: { show: false },
+  }));
+
+  const valueAxis = computed(() => ({
+    axisLine: { show: false },
+    axisTick: { show: false },
+    axisLabel: { color: colors.value.textSecondary },
+    splitLine: {
+      show: true,
+      lineStyle: { color: colors.value.grid, type: "dashed" as const },
     },
   }));
 
-  return { isDark, colors, baseOption };
+  return { isDark, colors, baseOption, categoryAxis, valueAxis };
 }

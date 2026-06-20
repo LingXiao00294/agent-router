@@ -1,6 +1,6 @@
 <template>
   <div class="stats-grid">
-    <template v-if="loading">
+    <template v-if="loading && !summary">
       <UiCard v-for="i in 6" :key="i" class="stat-skeleton">
         <UiSkeleton variant="text" class="skeleton-value" />
         <UiSkeleton variant="text" class="skeleton-label" />
