@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import typer
 
-from agent_router.cli.context import CliContext
+from agent_router.cli.context import CliContext, load_config_or_exit
 from agent_router.cli.output import emit
-from agent_router.config import load_config
 
 models_app = typer.Typer(help="虚拟模型")
 
@@ -13,7 +12,7 @@ models_app = typer.Typer(help="虚拟模型")
 def list_models(ctx: typer.Context) -> None:
     """列出虚拟模型（Anthropic List Models 格式）."""
     cli: CliContext = ctx.obj
-    config = load_config(cli.config)
+    config = load_config_or_exit(cli)
     data = {
         "data": [
             {

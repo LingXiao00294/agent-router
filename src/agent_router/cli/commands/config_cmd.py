@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import typer
 
-from agent_router.cli.context import CliContext
+from agent_router.cli.context import CliContext, load_config_or_exit
 from agent_router.cli.output import emit
-from agent_router.config import load_config, resolved_config_view, validate_config
+from agent_router.config import resolved_config_view, validate_config
 from agent_router.config_service import (
     get_config_masked,
     list_models_raw,
@@ -54,5 +54,5 @@ def models(ctx: typer.Context) -> None:
 def resolved(ctx: typer.Context) -> None:
     """显示解析后的运行时配置视图."""
     cli: CliContext = ctx.obj
-    config = load_config(cli.config)
+    config = load_config_or_exit(cli)
     emit(resolved_config_view(config), cli.output)

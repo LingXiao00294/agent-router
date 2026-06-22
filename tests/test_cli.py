@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -57,7 +56,6 @@ class TestCLI:
     def test_models_list(self):
         path = _write_toml(_SAMPLE_TOML)
         try:
-            os.environ.setdefault("TEST_CLI", "1")
             result = runner.invoke(app, ["-c", str(path), "-o", "json", "models", "list"])
             assert result.exit_code == 0
             assert "test-model" in result.stdout

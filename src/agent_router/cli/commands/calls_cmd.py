@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import time
+import asyncio
+import sys
 
 import typer
 
@@ -22,7 +23,7 @@ calls_app = typer.Typer(help="调用记录查询")
 @calls_app.command("list")
 def list_calls(
     ctx: typer.Context,
-    page: int = typer.Option(1, "--page", "-p", min=1),
+    page: int = typer.Option(1, "--page", min=1),
     size: int = typer.Option(50, "--size", "-s", min=1, max=200),
     model: str | None = typer.Option(None, "--model", "-m"),
     status: str | None = typer.Option(None, "--status"),
@@ -79,24 +80,36 @@ def tail_calls(
 ) -> None:
     """显示最近的调用记录."""
     cli: CliContext = ctx.obj
-    seen: set[str] = set()
 
-    async def _fetch():
+    async def _run() -> None:
         store = await _with_store(cli.db)
         try:
-            calls, _ = await store.list_calls(page=1, size=lines)
-            return calls
+            if not follow:
+                calls, _ = await store.list_calls(page=1, size=lines)
+                emit(calls, cli.output)
+                return
+            # follow 模式: 单连接常驻（避免每轮新建事件循环 + sqlite 连接 + 重跑 schema）；
+            # 有界去重；瞬时查询错误（如 sqlite database is locked）跳过本轮而非整个 tail 崩溃。
+            seen: dict[str, None] = {}
+            seen_cap = max(lines * 4, 64)
+            while True:
+                try:
+                    calls, _ = await store.list_calls(page=1, size=lines)
+                except Exception as e:
+                    print(f"tail: 查询失败，跳过本轮: {e}", file=sys.stderr)
+                    await asyncio.sleep(interval)
+                    continue
+                # list_calls 按 timestamp DESC 返回，倒序后按 旧→新 顺序输出新增项
+                for call in reversed(calls):
+                    cid = call["id"]
+                    if cid in seen:
+                        continue
+                    emit(call, cli.output)
+                    seen[cid] = None
+                    if len(seen) > seen_cap:
+                        del seen[next(iter(seen))]
+                await asyncio.sleep(interval)
         finally:
             await store.close()
 
-    while True:
-        calls = run_async(_fetch())
-        if follow:
-            new_calls = [c for c in reversed(calls) if c["id"] not in seen]
-            for call in new_calls:
-                seen.add(call["id"])
-                emit(call, cli.output)
-        else:
-            emit(calls, cli.output)
-            break
-        time.sleep(interval)
+    run_async(_run())

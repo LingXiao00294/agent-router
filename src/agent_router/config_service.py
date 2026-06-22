@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from copy import deepcopy
@@ -38,8 +39,11 @@ def read_config_raw(config_path: str | Path) -> dict:
     path = Path(config_path)
     if not path.exists():
         raise ConfigFileError(f"配置文件不存在: {config_path}")
-    with open(path, "rb") as f:
-        return tomllib.load(f)
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigFileError(f"配置文件 TOML 解析失败: {e}") from e
 
 
 def get_config_masked(config_path: str | Path) -> dict:
@@ -48,8 +52,11 @@ def get_config_masked(config_path: str | Path) -> dict:
     safe = deepcopy(raw)
     for pdata in safe.get("providers", {}).values():
         if "api_key" in pdata:
-            pdata["has_key"] = bool(pdata["api_key"])
-            pdata["api_key"] = mask_key(pdata["api_key"])
+            raw_key = pdata["api_key"]
+            # has_key 反映运行时是否有可用 key: 展开 ${VAR} 后仍含未解析占位符（变量未设置）→ 视为无可用 key
+            expanded = os.path.expandvars(raw_key)
+            pdata["has_key"] = "${" not in expanded and bool(expanded)
+            pdata["api_key"] = mask_key(raw_key)
     return safe
 
 

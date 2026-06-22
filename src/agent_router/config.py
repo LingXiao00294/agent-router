@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 DEFAULT_LOG_FILE = "logs/agent-router.log"
 DEFAULT_LOG_MAX_BYTES = 10_000_000
@@ -173,14 +174,20 @@ def _parse_config(raw: dict) -> ValidationResult:
         models[virtual_name] = resolved
     if errors:
         return ValidationResult(errors=errors, warnings=warnings)
-    return ValidationResult(
-        config=AppConfig(
+    try:
+        config = AppConfig(
             server=ServerConfig(**server_raw),
             router=RouterConfig(**router_raw),
             models=models,
-        ),
-        warnings=warnings,
-    )
+        )
+    except ValidationError as e:
+        # server/router 段字段非法（如 log_level 拼写错误、port 非数字）转为结构化错误，
+        # 而非让 ValidationError 逃逸出 validate_config（破坏“返回 ValidationResult”契约）。
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err["loc"])
+            errors.append(f"[{loc}] {err['msg']}")
+        return ValidationResult(errors=errors, warnings=warnings)
+    return ValidationResult(config=config, warnings=warnings)
 
 
 def load_config(config_path: str | Path) -> AppConfig:
@@ -188,6 +195,10 @@ def load_config(config_path: str | Path) -> AppConfig:
     if not result.ok:
         raise ConfigError(result.errors, result.warnings)
     assert result.config is not None
+    # 启动期诊断：恢复旧的 stderr 提示行为，避免配置漂移（如模型引用未知 provider、
+    # 无有效 provider 已跳过）静默化，直到请求期才以 UnknownModelError 暴露。
+    for w in result.warnings:
+        print(f"警告: {w}", file=sys.stderr)
     return result.config
 
 
