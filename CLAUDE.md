@@ -38,12 +38,14 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 ### 配置层 (`config.py`)
 
 - `config.toml` 定义 `[server]`、`[router]`、`[providers.*]`、`[[models.*]]`
-- `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开
+- `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开；`.env`（若存在）由 CLI 全局 callback 的 `load_dotenv()` 注入，对所有子命令生效（非必须，缺失时仅相关 provider 被跳过）
+- api_key 优先级：真实 shell 环境变量最高，`.env` 用 `load_dotenv(override=False)` **仅补充**真实环境里没有的变量、不覆盖已存在的；`config.toml` 中的明文 key 直接使用、不参与环境变量解析，`${ENV_VAR}` 占位符则在展开后的环境里查找，解析不到则该 provider 被跳过
 - 虚拟模型 → 按 priority 排序的 `list[ProviderConfig]`
 - `[router]` 段配置全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
 - 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`（在 `[providers.*]` 段），**覆盖**全局默认值；路由时实际生效的是 provider 级别的值（见 `routing.py` 中 `provider_cfg.failure_threshold`）
 - provider `name` 字段来自 TOML 中的 `[providers.<name>]` 键，无需显式填写
 - `load_config` 校验失败时抛出 `ConfigError`；热重载时 app 层捕获 `ConfigError` 转为 `RuntimeError`，保留旧配置不变
+- api_key 为空或 `${ENV_VAR}` 未解析（环境变量未设置）的 provider 会被**跳过并告警**（warning），不阻断配置加载；引用该 provider 的模型按“未知 provider”逻辑自动跳过——工具在缺少 `.env` 时仍可启动
 - `.env` 和 `config.toml` 已在 `.gitignore` 中，不会提交
 
 ### 路由层 (`routing.py`)

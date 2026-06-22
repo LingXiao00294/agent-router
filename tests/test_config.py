@@ -164,7 +164,8 @@ port = 9456
         finally:
             path.unlink()
 
-    def test_unresolved_env_var(self):
+    def test_unresolved_env_var_skips_provider(self):
+        """api_key 对应环境变量未设置时，该 provider 被跳过（warning），不阻断配置加载。"""
         toml = """
 [server]
 host = "127.0.0.1"
@@ -175,6 +176,49 @@ type = "anthropic"
 api_key = "${NONEXISTENT_ENV_VAR_12345}"
 base_url = "https://api.com"
 
+[providers.p2]
+type = "anthropic"
+api_key = "valid-key"
+base_url = "https://api2.com"
+
+[[models.test]]
+provider = "p1"
+model = "m1"
+priority = 1
+
+[[models.other]]
+provider = "p2"
+model = "m2"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            # p1 因 api_key 未解析被跳过 → 引用 p1 的模型 test 不存在
+            assert "test" not in config.models
+            # p2 的 api_key 有效 → 模型 other 正常加载
+            assert "other" in config.models
+            assert config.models["other"][0].api_key == "valid-key"
+        finally:
+            path.unlink()
+
+    def test_all_providers_missing_key_still_loads(self):
+        """所有 provider 都缺 key 时配置仍可加载（models 为空），工具可启动。"""
+        toml = """
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[providers.p1]
+type = "anthropic"
+api_key = "${UNSET_VAR_A}"
+base_url = "https://api.com"
+
+[providers.p2]
+type = "anthropic"
+api_key = ""
+base_url = "https://api2.com"
+
 [[models.test]]
 provider = "p1"
 model = "m1"
@@ -182,8 +226,9 @@ priority = 1
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(ConfigError):
-                load_config(path)
+            config = load_config(path)
+            # 所有 provider 被跳过、无可用模型，但不报错（工具仍可启动）
+            assert config.models == {}
         finally:
             path.unlink()
 

@@ -4,6 +4,7 @@ from importlib.metadata import version
 from typing import Literal
 
 import typer
+from dotenv import load_dotenv
 
 from agent_router.cli.commands.calls_cmd import calls_app
 from agent_router.cli.commands.config_cmd import config_app
@@ -38,6 +39,9 @@ def main(
     port: int | None = typer.Option(None, "--port", "-p", help="覆盖 server.port"),
 ) -> None:
     """Agent Router CLI."""
+    # 所有子命令统一注入 .env（若存在），使 config validate / models list 等非启动
+    # 命令也能展开 ${VAR}；.env 非必须，缺失时仅相关 provider 被跳过，工具仍可启动。
+    load_dotenv()
     ctx.obj = CliContext(
         config=config,
         db=db,

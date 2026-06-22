@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uvicorn
-from dotenv import load_dotenv
 
 from agent_router.cli.context import CliContext, load_config_or_exit
 from agent_router.db import CallStore
@@ -10,8 +9,6 @@ from agent_router.monitoring import setup_logging
 
 def run_serve(ctx: CliContext) -> None:
     """启动 HTTP 服务."""
-    load_dotenv()
-
     config = load_config_or_exit(ctx)
     if ctx.host is not None:
         config.server.host = ctx.host

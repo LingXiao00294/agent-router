@@ -15,7 +15,12 @@ DEFAULT_LOG_BACKUP_COUNT = 5
 
 
 class ProviderDef(BaseModel):
-    """Provider 基础定义 — 每个 provider 只配置一次."""
+    """Provider 基础定义 — 每个 provider 只配置一次.
+
+    api_key 允许为空或保留未解析的 ${VAR} 占位符（环境变量未设置）；
+    此类 provider 在 _parse_config 中被跳过（warning），不阻断配置加载，
+    以保证工具在缺少 .env / 环境变量时仍可启动。
+    """
 
     type: Literal["anthropic", "openai"]
     api_key: str
@@ -23,13 +28,6 @@ class ProviderDef(BaseModel):
     timeout_seconds: float = 120.0
     failure_threshold: int | None = None
     recovery_timeout: float | None = None
-
-    @field_validator("api_key")
-    @classmethod
-    def api_key_must_not_be_empty_or_unresolved(cls, v: str) -> str:
-        if not v or v.startswith("${"):
-            raise ValueError(f"环境变量未设置或未正确插值: {v}")
-        return v
 
     @field_validator("base_url")
     @classmethod
@@ -135,9 +133,19 @@ def _parse_config(raw: dict) -> ValidationResult:
     providers: dict[str, ProviderDef] = {}
     for name, pdata in providers_raw.items():
         try:
-            providers[name] = ProviderDef(**pdata)
+            pdef = ProviderDef(**pdata)
         except Exception as e:
             errors.append(f"解析 provider \'{name}\' 配置失败: {e}")
+            continue
+        # api_key 为空或仍是未解析的 ${VAR} 占位符（环境变量未设置/未提供）时，
+        # 不阻断配置加载：跳过该 provider 并告警，让其它配置完整的 provider/模型
+        # 继续可用。引用此 provider 的模型会在下方按“未知 provider”逻辑自动跳过。
+        if not pdef.api_key or pdef.api_key.startswith("${"):
+            warnings.append(
+                f"provider \'{name}\' 的 api_key 未解析（{pdef.api_key or '空值'}），已跳过"
+            )
+            continue
+        providers[name] = pdef
     if errors:
         return ValidationResult(errors=errors, warnings=warnings)
     models: dict[str, list[ProviderConfig]] = {}
