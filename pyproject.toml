@@ -17,6 +17,8 @@ dependencies = [
     "aiosqlite>=0.21",
     "orjson>=3",
     "python-dotenv>=1.2.2",
+    "typer>=0.26.7",
+    "rich>=15.0.0",
 ]
 
 [project.scripts]

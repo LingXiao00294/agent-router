@@ -16,7 +16,7 @@ from structlog.contextvars import bind_contextvars, get_contextvars, unbind_cont
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
-from agent_router.config import AppConfig, load_config
+from agent_router.config import AppConfig, ConfigError, load_config
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
 from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
@@ -78,7 +78,7 @@ def create_app(
     async def _reload_config() -> None:
         try:
             new_config = load_config(config_path)
-        except SystemExit:
+        except ConfigError:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
         # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
         await router_engine.reload_config(new_config)
@@ -386,12 +386,24 @@ async def _stream_wrapper(
             unbind_contextvars("request_id")
 
 
+def resolve_dashboard_dist() -> Path | None:
+    """解析 dashboard 静态资源目录，按优先级尝试多个候选路径."""
+    pkg = Path(__file__).resolve().parent
+    candidates = [
+        pkg.parent.parent / "dashboard" / "dist",  # 源码: 项目根/dashboard/dist
+        pkg.parent / "dashboard" / "dist",  # wheel: site-packages/dashboard/dist
+        Path.cwd() / "dashboard" / "dist",  # CWD fallback
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def _mount_dashboard(app: FastAPI) -> None:
     """挂载 dashboard 静态文件，支持 SPA 路由."""
-    dist = Path(__file__).parent.parent.parent / "dashboard" / "dist"
-    if not dist.is_dir():
-        dist = Path("dashboard") / "dist"  # CWD fallback for wheel installs
-    if not dist.is_dir():
+    dist = resolve_dashboard_dist()
+    if dist is None:
         return
 
     # 先挂载静态资源

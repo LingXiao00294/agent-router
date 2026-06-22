@@ -49,6 +49,47 @@ curl http://127.0.0.1:9456/health
 
 > **注意**：`ANTHROPIC_AUTH_TOKEN` 可以设为任意非空值（如 `dummy`），router 不会校验 token。三个 `DEFAULT_*_MODEL` 需与 `config.toml` 中定义的虚拟模型名一致。
 
+## CLI 命令
+
+```bash
+# 启动服务（默认行为，等同 serve）
+uv run agent-router
+uv run agent-router serve -c config.toml -p 9456 --db calls.db
+
+# 版本与健康检查
+uv run agent-router version
+uv run agent-router health
+uv run agent-router health --deep          # 含数据库检查
+
+# 配置
+uv run agent-router config validate
+uv run agent-router config show
+uv run agent-router config providers
+uv run agent-router config models
+uv run agent-router config resolved
+
+# 虚拟模型
+uv run agent-router models list
+
+# 调用统计（读取 calls.db）
+uv run agent-router metrics summary
+uv run agent-router metrics by-model
+uv run agent-router metrics by-provider
+uv run agent-router metrics by-real-model
+uv run agent-router metrics daily --days 30
+
+# 调用记录
+uv run agent-router calls list
+uv run agent-router calls get <call-id>
+uv run agent-router calls tail -n 10
+
+# 全局选项
+#   -c, --config   配置文件路径（默认 config.toml）
+#   --db           数据库路径（默认 calls.db）
+#   -o, --output   输出格式: table（默认）或 json
+#   --host / -p    覆盖 server.host / server.port（仅 serve）
+```
+
 ## 配置
 
 ### config.toml
@@ -125,7 +166,9 @@ uv run ty src tests                    # 类型检查
 
 ```
 src/agent_router/
-├── main.py              # 入口：argparse + uvicorn
+├── main.py              # 入口：Typer CLI
+├── cli/                 # Typer CLI 子命令
+├── config_service.py    # 配置读写与脱敏
 ├── app.py               # FastAPI 应用 + 路由处理
 ├── config.py            # TOML 加载 + ${ENV_VAR} 展开 + Pydantic 校验
 ├── routing.py           # 核心：优先级链 + 故障转移

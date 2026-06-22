@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agent_router.app import create_app
-from agent_router.config import AppConfig, ProviderConfig, load_config
+from agent_router.config import AppConfig, ConfigError, ProviderConfig, load_config
 from agent_router.db import CallStore
 from agent_router.routing import Router
 
@@ -110,7 +110,7 @@ priority = 1
             del os.environ["TEST_API_KEY"]
 
     def test_missing_config_file(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ConfigError):
             load_config("/nonexistent/config.toml")
 
     def test_empty_models(self):
@@ -182,7 +182,7 @@ priority = 1
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigError):
                 load_config(path)
         finally:
             path.unlink()
@@ -304,7 +304,7 @@ priority = 1
 """
         path = _write_toml(toml)
         try:
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigError):
                 load_config(path)
         finally:
             path.unlink()

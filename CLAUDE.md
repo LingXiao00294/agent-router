@@ -17,12 +17,16 @@ agent-router 是一个本地 LLM API 路由代理，将虚拟模型名映射到�
 # Python 后端
 uv sync                                    # 安装/同步依赖（Python >=3.12）
 uv run agent-router                        # 启动 (默认读取 config.toml)
-uv run agent-router -c config.toml -p 9456 --db calls.db
+uv run agent-router serve -c config.toml -p 9456 --db calls.db
+uv run agent-router config validate        # 校验配置
+uv run agent-router models list            # 列出虚拟模型
+uv run agent-router metrics summary        # 调用统计
+uv run agent-router health --deep          # 健康检查（含数据库）
 uv run pytest                              # 运行所有测试
 uv run pytest tests/test_routing.py -v     # 运行单个测试文件
 uv run pytest -k "test_name" -v            # 按名称匹配运行
 uv run ruff check src tests                # Lint
-uv run ty check src tests                 # 类型检查
+uv run ty check src tests                  # 类型检查
 
 # 前端 Dashboard
 cd dashboard && npm run dev                # 开发模式 (Vite 代理后端到 127.0.0.1:9456)
@@ -39,7 +43,7 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 - `[router]` 段配置全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
 - 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`（在 `[providers.*]` 段），**覆盖**全局默认值；路由时实际生效的是 provider 级别的值（见 `routing.py` 中 `provider_cfg.failure_threshold`）
 - provider `name` 字段来自 TOML 中的 `[providers.<name>]` 键，无需显式填写
-- `load_config` 校验失败时调用 `sys.exit(1)`；热重载时 app 层捕获 `SystemExit` 转为 `RuntimeError`，保留旧配置不变
+- `load_config` 校验失败时抛出 `ConfigError`；热重载时 app 层捕获 `ConfigError` 转为 `RuntimeError`，保留旧配置不变
 - `.env` 和 `config.toml` 已在 `.gitignore` 中，不会提交
 
 ### 路由层 (`routing.py`)

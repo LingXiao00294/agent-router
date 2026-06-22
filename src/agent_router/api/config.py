@@ -1,130 +1,19 @@
 from __future__ import annotations
 
-import re
-import tomllib
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-
-def _mask_key(key: str) -> str:
-    if len(key) <= 8:
-        return "*" * len(key)
-    return key[:4] + "*" * (len(key) - 8) + key[-4:]
-
-
-def _is_key_masked(api_key: str) -> bool:
-    """检查 api_key 是否为空、占位符或已脱敏."""
-    if not api_key or api_key == "${PLACEHOLDER}":
-        return True
-    if re.match(r"^\*+$", api_key):
-        return True
-    # _mask_key 产物: 前4 + 星号 + 后4
-    if len(api_key) > 8:
-        middle = api_key[4:-4]
-        if middle and all(c == "*" for c in middle):
-            return True
-    return False
-
-
-def _read_config_raw(config_path: str) -> dict:
-    path = Path(config_path)
-    if not path.exists():
-        raise HTTPException(500, f"配置文件不存在: {config_path}")
-    with open(path, "rb") as f:
-        return tomllib.load(f)
-
-
-def _toml_escape(s: str) -> str:
-    """转义 TOML basic string 中的特殊字符."""
-    return (
-        s.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-    )
-
-
-def _toml_key(name: str) -> str:
-    """返回正确引用的 TOML key，处理含 . [] 等的名称."""
-    if re.match(r"^[A-Za-z0-9_-]+$", name):
-        return name
-    return f'"{_toml_escape(name)}"'
-
-
-def _toml_value(v: Any) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, str):
-        return f'"{_toml_escape(v)}"'
-    if isinstance(v, (int, float)):
-        return str(v)
-    return f'"{_toml_escape(str(v))}"'
-
-
-def _write_toml(config_path: str, data: dict) -> None:
-    """将结构化配置原子写入 TOML 文件."""
-    lines: list[str] = []
-
-    # [server]
-    server = data.get("server", {})
-    lines.append("[server]")
-    for k, v in server.items():
-        if v is None:
-            continue
-        lines.append(f"{k} = {_toml_value(v)}")
-    lines.append("")
-
-    # [router]
-    router = data.get("router")
-    if router:
-        lines.append("[router]")
-        for k, v in router.items():
-            if v is None:
-                continue
-            lines.append(f"{k} = {_toml_value(v)}")
-        lines.append("")
-
-    # [providers.*]
-    providers = data.get("providers", {})
-    for name, pdata in providers.items():
-        lines.append(f"[providers.{_toml_key(name)}]")
-        for k, v in pdata.items():
-            if v is None:
-                continue
-            lines.append(f"{k} = {_toml_value(v)}")
-        lines.append("")
-
-    # [[models.*]]
-    models = data.get("models", {})
-    for vname, refs in models.items():
-        for ref in refs:
-            lines.append(f"[[models.{_toml_key(vname)}]]")
-            for k, v in ref.items():
-                if v is None:
-                    continue
-                lines.append(f"{k} = {_toml_value(v)}")
-            lines.append("")
-
-    content = "\n".join(lines) + "\n"
-    tmp_path = Path(config_path).with_suffix(".tmp")
-    try:
-        with open(tmp_path, "w") as f:
-            f.write(content)
-        # 验证写入的 TOML 可解析
-        with open(tmp_path, "rb") as f:
-            tomllib.load(f)
-    except Exception:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    tmp_path.replace(config_path)
+from agent_router.config_service import (
+    ConfigFileError,
+    get_config_masked,
+    is_key_masked,
+    list_models_raw,
+    list_providers_masked,
+    read_config_raw,
+    write_toml,
+)
 
 
 def create_config_router(
@@ -136,44 +25,26 @@ def create_config_router(
     @router.get("/api/config")
     async def get_config():
         """返回完整配置（api_key 脱敏）."""
-        raw = _read_config_raw(config_path)
-        safe = deepcopy(raw)
-        for pname, pdata in safe.get("providers", {}).items():
-            if "api_key" in pdata:
-                pdata["has_key"] = bool(pdata["api_key"])
-                pdata["api_key"] = _mask_key(pdata["api_key"])
-        return safe
+        try:
+            return get_config_masked(config_path)
+        except ConfigFileError as e:
+            raise HTTPException(500, e.message) from e
 
     @router.get("/api/config/providers")
     async def list_providers():
         """列出所有 provider（脱敏）."""
-        raw = _read_config_raw(config_path)
-        result: dict[str, dict] = {}
-        for pname, pdata in raw.get("providers", {}).items():
-            result[pname] = {
-                "type": pdata.get("type", "anthropic"),
-                "base_url": pdata.get("base_url", ""),
-                "api_key": _mask_key(pdata.get("api_key", "")),
-                "timeout_seconds": pdata.get("timeout_seconds", 120.0),
-            }
-        return result
+        try:
+            return list_providers_masked(config_path)
+        except ConfigFileError as e:
+            raise HTTPException(500, e.message) from e
 
     @router.get("/api/config/models")
     async def list_models():
         """列出所有虚拟模型及其 provider 链."""
-        raw = _read_config_raw(config_path)
-        models = raw.get("models", {})
-        result: dict[str, list[dict]] = {}
-        for vname, refs in models.items():
-            result[vname] = [
-                {
-                    "provider": r["provider"],
-                    "model": r["model"],
-                    "priority": r["priority"],
-                }
-                for r in sorted(refs, key=lambda r: r.get("priority", 99))
-            ]
-        return result
+        try:
+            return list_models_raw(config_path)
+        except ConfigFileError as e:
+            raise HTTPException(500, e.message) from e
 
     @router.put("/api/config")
     async def update_config(body: dict):
@@ -183,19 +54,17 @@ def create_config_router(
         缺少 router/models 段时合并已有配置，防止误丢失.
         """
         try:
-            existing = _read_config_raw(config_path)
+            existing = read_config_raw(config_path)
             body = deepcopy(body)
 
-            # 合并缺失段：server、router、providers、models
             for section in ("server", "router", "providers", "models"):
                 if section not in body:
                     body[section] = existing.get(section, {})
 
-            # api_key 脱敏值保留原有值
             existing_providers = existing.get("providers", {})
             for pname, pdata in body.get("providers", {}).items():
                 api_key = pdata.get("api_key", "")
-                if _is_key_masked(api_key):
+                if is_key_masked(api_key):
                     if pname in existing_providers:
                         pdata["api_key"] = existing_providers[pname].get(
                             "api_key", api_key
@@ -206,18 +75,19 @@ def create_config_router(
                             f"新建 provider '{pname}' 需要提供有效的 api_key",
                         )
 
-            _write_toml(config_path, body)
+            write_toml(config_path, body)
         except HTTPException:
             raise
+        except ConfigFileError as e:
+            raise HTTPException(500, e.message) from e
         except Exception as e:
-            raise HTTPException(500, f"写入配置失败: {e}")
+            raise HTTPException(500, f"写入配置失败: {e}") from e
 
-        # 热重载
         if reload_config_fn is not None:
             try:
                 await reload_config_fn()
             except Exception as e:
-                raise HTTPException(500, f"配置已写入但热重载失败: {e}")
+                raise HTTPException(500, f"配置已写入但热重载失败: {e}") from e
 
         return {"status": "ok", "message": "配置已更新并热重载"}
 
