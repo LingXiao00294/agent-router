@@ -30,5 +30,5 @@ class BaseProvider(ABC):
         """非流式请求，返回完整响应 JSON."""
 
     @abstractmethod
-    async def send_stream(self, request_body: dict) -> AsyncIterator[bytes]:
+    def send_stream(self, request_body: dict) -> AsyncIterator[bytes]:
         """流式请求，yield SSE 原始字节."""

@@ -130,7 +130,9 @@ class TestCircuitBreakerUnit:
         assert not await cb.is_available("p1")
         time.sleep(0.06)
         assert not await cb.is_available("p1")  # global timeout
-        assert await cb.is_available("p1", recovery_timeout=0.05)  # per-provider timeout
+        assert await cb.is_available(
+            "p1", recovery_timeout=0.05
+        )  # per-provider timeout
 
 
 class TestCircuitBreakerRouterIntegration:

@@ -42,8 +42,12 @@ class CircuitBreaker:
         self._last_failure_time: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
-    async def state(self, provider: str, recovery_timeout: float | None = None) -> CircuitState:
-        timeout = recovery_timeout if recovery_timeout is not None else self.recovery_timeout
+    async def state(
+        self, provider: str, recovery_timeout: float | None = None
+    ) -> CircuitState:
+        timeout = (
+            recovery_timeout if recovery_timeout is not None else self.recovery_timeout
+        )
         async with self._lock:
             current = self._states.get(provider, CircuitState.CLOSED)
             if current == CircuitState.OPEN:
@@ -58,8 +62,13 @@ class CircuitBreaker:
                     return CircuitState.HALF_OPEN
             return current
 
-    async def is_available(self, provider: str, recovery_timeout: float | None = None) -> bool:
-        return await self.state(provider, recovery_timeout=recovery_timeout) != CircuitState.OPEN
+    async def is_available(
+        self, provider: str, recovery_timeout: float | None = None
+    ) -> bool:
+        return (
+            await self.state(provider, recovery_timeout=recovery_timeout)
+            != CircuitState.OPEN
+        )
 
     async def record_success(self, provider: str) -> None:
         async with self._lock:
@@ -81,7 +90,11 @@ class CircuitBreaker:
         immediate: bool = False,
         failure_threshold: int | None = None,
     ) -> None:
-        threshold = failure_threshold if failure_threshold is not None else self.failure_threshold
+        threshold = (
+            failure_threshold
+            if failure_threshold is not None
+            else self.failure_threshold
+        )
         async with self._lock:
             if immediate:
                 self._failure_counts[provider] = threshold

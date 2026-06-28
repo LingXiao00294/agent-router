@@ -114,12 +114,16 @@ class TestRecordCall:
     @pytest.mark.asyncio
     async def test_summary(self, store):
         await store.record(
-            virtual_model="test", status="success",
-            input_tokens=100, output_tokens=50,
+            virtual_model="test",
+            status="success",
+            input_tokens=100,
+            output_tokens=50,
         )
         await store.record(
-            virtual_model="test", status="error",
-            error_type="timeout", error_message="timeout",
+            virtual_model="test",
+            status="error",
+            error_type="timeout",
+            error_message="timeout",
         )
         summary = await store.summary()
         assert summary["total_calls"] == 2
@@ -133,7 +137,8 @@ class TestRecordCall:
     async def test_list_calls_pagination(self, store):
         for i in range(5):
             await store.record(
-                virtual_model="test", status="success",
+                virtual_model="test",
+                status="success",
             )
         calls, total = await store.list_calls(page=1, size=3)
         assert len(calls) == 3
@@ -143,8 +148,10 @@ class TestRecordCall:
     async def test_list_calls_status_filter(self, store):
         await store.record(virtual_model="m", status="success")
         await store.record(
-            virtual_model="m", status="error",
-            error_type="timeout", error_message="boom",
+            virtual_model="m",
+            status="error",
+            error_type="timeout",
+            error_message="boom",
         )
         await store.record(virtual_model="m", status="success")
 
@@ -160,19 +167,21 @@ class TestRecordCall:
     async def test_list_calls_model_status_combo(self, store):
         await store.record(virtual_model="a", status="success")
         await store.record(
-            virtual_model="a", status="error",
-            error_type="x", error_message="y",
+            virtual_model="a",
+            status="error",
+            error_type="x",
+            error_message="y",
         )
         await store.record(
-            virtual_model="b", status="error",
-            error_type="x", error_message="y",
+            virtual_model="b",
+            status="error",
+            error_type="x",
+            error_message="y",
         )
 
         calls, total = await store.list_calls(model="a", status="error")
         assert total == 1
-        assert all(
-            c["virtual_model"] == "a" and c["status"] == "error" for c in calls
-        )
+        assert all(c["virtual_model"] == "a" and c["status"] == "error" for c in calls)
 
         # 单独 model 过滤仍正常工作
         _, total = await store.list_calls(model="b")

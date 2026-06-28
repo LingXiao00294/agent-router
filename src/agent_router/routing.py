@@ -63,7 +63,9 @@ def _check_stream_error(buffer: bytes) -> None:
         raise NonRetryableError(f"Stream error ({error_type}): {error_message}")
     except (json.JSONDecodeError, KeyError, TypeError):
         # Malformed error event — non-retryable since we can't identify the type
-        raise NonRetryableError(f"Stream error: {m.group(1).decode(errors='replace')[:500]}")
+        raise NonRetryableError(
+            f"Stream error: {m.group(1).decode(errors='replace')[:500]}"
+        )
 
 
 def _create_provider(config: ProviderConfig, http_client) -> BaseProvider:
@@ -228,8 +230,15 @@ class Router:
 
             except (RetryableError, NonRetryableError) as e:
                 await self._handle_provider_error(
-                    e, provider_cfg, request_id, attempt,
-                    p_start, errors, outcome, providers, i,
+                    e,
+                    provider_cfg,
+                    request_id,
+                    attempt,
+                    p_start,
+                    errors,
+                    outcome,
+                    providers,
+                    i,
                 )
 
         # 全部失败
@@ -316,8 +325,15 @@ class Router:
 
             except (RetryableError, NonRetryableError) as e:
                 await self._handle_provider_error(
-                    e, provider_cfg, request_id, attempt,
-                    p_start, errors, outcome, providers, i,
+                    e,
+                    provider_cfg,
+                    request_id,
+                    attempt,
+                    p_start,
+                    errors,
+                    outcome,
+                    providers,
+                    i,
                 )
 
         # 全部失败
@@ -341,11 +357,21 @@ class Router:
         skipped: list[dict] = []
 
         for p in all_providers:
-            if await self.circuit_breaker.is_available(p.name, recovery_timeout=p.recovery_timeout):
+            if await self.circuit_breaker.is_available(
+                p.name, recovery_timeout=p.recovery_timeout
+            ):
                 available.append(p)
             else:
                 skipped.append(
-                    {"provider": p.name, "model": p.model, "state": (await self.circuit_breaker.state(p.name, recovery_timeout=p.recovery_timeout)).value}
+                    {
+                        "provider": p.name,
+                        "model": p.model,
+                        "state": (
+                            await self.circuit_breaker.state(
+                                p.name, recovery_timeout=p.recovery_timeout
+                            )
+                        ).value,
+                    }
                 )
 
         if skipped:

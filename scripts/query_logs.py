@@ -1,4 +1,5 @@
 """快速查看调用记录."""
+
 import sqlite3
 import sys
 
@@ -14,23 +15,31 @@ rows = conn.execute(
 ).fetchall()
 
 fmt = "{:<38} {:<20} {:<10} {:<22} {:<8} {:<8} {:<6} {:<6}"
-print(fmt.format("ID", "时间", "虚模型", "实模型", "状态", "延迟ms", "入Token", "出Token"))
+print(
+    fmt.format("ID", "时间", "虚模型", "实模型", "状态", "延迟ms", "入Token", "出Token")
+)
 print("-" * 130)
 for r in rows:
     d = dict(r)
-    print(fmt.format(
-        d["id"][:36],
-        d["timestamp"][:19] or "-",
-        (d["virtual_model"] or "-")[:18],
-        (d["provider_model"] or "-")[:20],
-        d["status"] or "-",
-        str(d["latency_ms"] or "-"),
-        str(d["input_tokens"] or "-"),
-        str(d["output_tokens"] or "-"),
-    ))
+    print(
+        fmt.format(
+            d["id"][:36],
+            d["timestamp"][:19] or "-",
+            (d["virtual_model"] or "-")[:18],
+            (d["provider_model"] or "-")[:20],
+            d["status"] or "-",
+            str(d["latency_ms"] or "-"),
+            str(d["input_tokens"] or "-"),
+            str(d["output_tokens"] or "-"),
+        )
+    )
 
 total = conn.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
-success = conn.execute("SELECT COUNT(*) FROM calls WHERE status = 'success'").fetchone()[0]
+success = conn.execute(
+    "SELECT COUNT(*) FROM calls WHERE status = 'success'"
+).fetchone()[0]
 cost = conn.execute("SELECT SUM(cost_usd) FROM calls").fetchone()[0] or 0
-print(f"\n总计: {total} 条 | 成功: {success} | 失败: {total - success} | 总费用: ${cost:.6f}")
+print(
+    f"\n总计: {total} 条 | 成功: {success} | 失败: {total - success} | 总费用: ${cost:.6f}"
+)
 conn.close()

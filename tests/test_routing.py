@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 import pytest
-from agent_router.routing import Router, UnknownModelError, AllProvidersFailedError, _check_stream_error
+from agent_router.routing import (
+    Router,
+    UnknownModelError,
+    AllProvidersFailedError,
+    _check_stream_error,
+)
 from agent_router.providers.base import NonRetryableError, RetryableError
 
 
@@ -43,14 +48,16 @@ class TestAllProvidersFailedError:
 
 def _sse_error_buffer(error_type: str, message: str) -> bytes:
     """Helper to build an SSE error event buffer."""
-    data = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    data = json.dumps(
+        {"type": "error", "error": {"type": error_type, "message": message}}
+    )
     return f"event: error\ndata: {data}\n\n".encode()
 
 
 class TestCheckStreamError:
     def test_no_error_event(self):
         """Normal SSE data should not raise."""
-        buf = b"event: message_start\ndata: {\"message\": {}}\n\n"
+        buf = b'event: message_start\ndata: {"message": {}}\n\n'
         _check_stream_error(buf)  # should not raise
 
     def test_auth_error_raises_retryable_with_immediate_break(self):
@@ -91,14 +98,14 @@ class TestCheckStreamError:
 
     def test_partial_buffer_no_match(self):
         """Incomplete SSE event should not raise."""
-        buf = b"event: error\ndata: {\"type\":"
+        buf = b'event: error\ndata: {"type":'
         _check_stream_error(buf)  # should not raise
 
     def test_error_in_later_chunk(self):
         """Error event appearing after normal data should still be detected."""
         buf = (
-            b"event: message_start\ndata: {\"message\": {}}\n\n"
-            b"event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"api_error\", \"message\": \"fail\"}}\n\n"
+            b'event: message_start\ndata: {"message": {}}\n\n'
+            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "fail"}}\n\n'
         )
         with pytest.raises(RetryableError, match="api_error"):
             _check_stream_error(buf)
