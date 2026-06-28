@@ -35,7 +35,9 @@ def create_metrics_router(store: CallStore) -> APIRouter:
         model: str | None = None,
         status: str | None = None,
     ):
-        calls, total = await store.list_calls(page=page, size=size, model=model, status=status)
+        calls, total = await store.list_calls(
+            page=page, size=size, model=model, status=status
+        )
         return {
             "data": calls,
             "total": total,

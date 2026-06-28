@@ -347,10 +347,18 @@ class TestReloadConfig:
 
         new_config = AppConfig(
             server=sample_config.server,
-            models={"m": [ProviderConfig(
-                type="anthropic", name="anthropic", model="x",
-                api_key="k", base_url="https://api.com", priority=1,
-            )]},
+            models={
+                "m": [
+                    ProviderConfig(
+                        type="anthropic",
+                        name="anthropic",
+                        model="x",
+                        api_key="k",
+                        base_url="https://api.com",
+                        priority=1,
+                    )
+                ]
+            },
         )
         await router.reload_config(new_config)
 

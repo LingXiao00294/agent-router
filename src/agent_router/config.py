@@ -112,7 +112,10 @@ def load_config(config_path: str | Path) -> AppConfig:
     models_raw: dict[str, list[dict]] = raw.get("models", {})
 
     if not providers_raw:
-        print("提示: 配置文件中未定义任何 provider，可通过 dashboard 添加", file=sys.stderr)
+        print(
+            "提示: 配置文件中未定义任何 provider，可通过 dashboard 添加",
+            file=sys.stderr,
+        )
 
     if not models_raw:
         print("提示: 配置文件中未定义任何模型，可通过 dashboard 添加", file=sys.stderr)

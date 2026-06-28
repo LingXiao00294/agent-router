@@ -202,7 +202,11 @@ def create_app(
         except AllProvidersFailedError as e:
             latency_ms = int((time.time() - start_time) * 1000)
             failover = [
-                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                {
+                    "provider": err["provider"],
+                    "model": err["model"],
+                    "error": err["error"],
+                }
                 for err in e.errors
             ]
             await store.record(
@@ -358,7 +362,11 @@ async def _stream_wrapper(
         failover = None
         if isinstance(e, AllProvidersFailedError):
             failover = [
-                {"provider": err["provider"], "model": err["model"], "error": err["error"]}
+                {
+                    "provider": err["provider"],
+                    "model": err["model"],
+                    "error": err["error"],
+                }
                 for err in e.errors
             ]
         await store.record(

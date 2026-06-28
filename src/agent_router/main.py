@@ -15,7 +15,8 @@ def main() -> None:
         description="Agent Router - 本地 LLM API 路由代理",
     )
     parser.add_argument(
-        "--config", "-c",
+        "--config",
+        "-c",
         default="config.toml",
         help="配置文件路径 (默认: config.toml)",
     )
@@ -25,7 +26,8 @@ def main() -> None:
         help="覆盖配置文件中的 server.host",
     )
     parser.add_argument(
-        "--port", "-p",
+        "--port",
+        "-p",
         type=int,
         default=None,
         help="覆盖配置文件中的 server.port",

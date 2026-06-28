@@ -244,9 +244,9 @@ def test_reconfigure_closes_old_file_handlers(tmp_path):
     with patch.object(old_file_handlers[0], "close") as mock_close:
         monitoring.reconfigure_logging("warning", log_file=str(log_file))
     assert mock_close.called, "旧文件 handler 未被关闭"
-    assert all(
-        h not in logging.getLogger().handlers for h in old_file_handlers
-    ), "旧文件 handler 仍残留在 root"
+    assert all(h not in logging.getLogger().handlers for h in old_file_handlers), (
+        "旧文件 handler 仍残留在 root"
+    )
 
 
 def test_log_file_optional_stdout_only(tmp_path, capsys):
@@ -282,16 +282,14 @@ async def test_streaming_request_id_propagates(tmp_path):
     monitoring.setup_logging("info", log_file=str(log_file))
 
     sse = (
-        b'event: message_start\n'
+        b"event: message_start\n"
         b'data: {"message":{"usage":{"input_tokens":10}}}\n\n'
-        b'event: message_delta\n'
+        b"event: message_delta\n"
         b'data: {"usage":{"output_tokens":5}}\n\n'
-        b'event: message_stop\n'
-        b'data: {}\n\n'
+        b"event: message_stop\n"
+        b"data: {}\n\n"
     )
-    mock_transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, content=sse)
-    )
+    mock_transport = httpx.MockTransport(lambda req: httpx.Response(200, content=sse))
     http_client = httpx.AsyncClient(transport=mock_transport)
 
     config = AppConfig(
@@ -317,8 +315,12 @@ async def test_streaming_request_id_propagates(tmp_path):
     clear_contextvars()
     try:
         outcome: dict = {}
-        body = {"model": "vm", "stream": True, "max_tokens": 100,
-                "messages": [{"role": "user", "content": "hi"}]}
+        body = {
+            "model": "vm",
+            "stream": True,
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
         async for _ in _stream_wrapper(
             router_engine.route_stream(body, outcome),
             outcome=outcome,
@@ -336,11 +338,11 @@ async def test_streaming_request_id_propagates(tmp_path):
     _flush()
     raw = log_file.read_text(encoding="utf-8")
     starts = [
-        json.loads(ln) for ln in raw.splitlines()
+        json.loads(ln)
+        for ln in raw.splitlines()
         if '"request.start"' in ln and '"stream": true' in ln
     ]
     assert starts, "routing 层未记录流式 request.start 日志"
     assert all(d.get("request_id") == "REQ-FIX-123" for d in starts), (
         f"流式 routing 层 request_id 未贯穿: {[d.get('request_id') for d in starts]}"
     )
-
