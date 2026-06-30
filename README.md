@@ -20,14 +20,58 @@ cp .env.example .env   # 编辑 .env，填入各 provider 的 API key
 # 3. 创建路由配置
 cp config.toml.example config.toml   # 可直接启动，之后通过 dashboard 添加 provider
 
-# 4. 启动
-uv run agent-router
+# 4. 启动 router
+uv run agent-router serve
 
-# 5. 验证
+# 5. 单独启动 dashboard（另一个终端）
+uv run agent-router dashboard
+
+# 6. 验证 router
 curl http://127.0.0.1:9456/health
 ```
 
-启动后可访问 `http://127.0.0.1:9456` 打开监控面板。
+router 默认监听 `http://127.0.0.1:9456`，dashboard 默认监听 `http://127.0.0.1:5173` 并代理到 router。
+
+也可以安装成用户级工具：
+
+```bash
+uv tool install .
+agent-router serve
+agent-router-dashboard
+```
+
+## CLI
+
+CLI 基于 Typer 实现。`agent-router` 默认等价于 `agent-router serve`，旧启动方式仍然可用。Dashboard 已从 router 中拆出，可以用 `agent-router dashboard` 子命令或独立的 `agent-router-dashboard` 命令启动。
+
+```bash
+uv run agent-router --help
+
+# 启动 router
+uv run agent-router
+uv run agent-router serve -c config.toml --db calls.db --host 127.0.0.1 --port 9456
+
+# 启动 dashboard
+uv run agent-router dashboard --router-url http://127.0.0.1:9456
+uv run agent-router-dashboard --router-url http://127.0.0.1:9456
+
+# 配置管理
+uv run agent-router config init
+uv run agent-router config validate -c config.toml
+uv run agent-router config show -c config.toml --format json
+
+# 路由排查
+uv run agent-router providers -c config.toml
+uv run agent-router models -c config.toml
+uv run agent-router doctor -c config.toml --db calls.db
+
+# 调用记录
+uv run agent-router stats --db calls.db
+uv run agent-router calls list --db calls.db --limit 20 --status error
+uv run agent-router calls show <call-id> --db calls.db --format json
+```
+
+`config init` 默认从 `config.toml.example` 生成 `config.toml`，目标文件已存在时不会覆盖；确需覆盖时添加 `--force`。`config validate`、`doctor` 和 `serve` 默认加载 `.env`，可用 `--no-env-file` 跳过。`dashboard` 默认查找源码目录或安装包内的 `dashboard/dist`，找不到时需要先执行 `cd dashboard && bun install && bun run build`。
 
 ### 配合 Claude Code 使用
 
@@ -105,12 +149,12 @@ priority = 2
 
 ```bash
 cd dashboard
-npm install
-npm run dev       # 开发模式 (Vite 代理到 127.0.0.1:9456)
-npm run build     # 生产构建 → dashboard/dist/
+bun install
+bun run dev       # 前端开发模式 (Vite 代理到 127.0.0.1:9456)
+bun run build     # 生产构建 → dashboard/dist/
 ```
 
-构建后启动 router，访问 `http://127.0.0.1:9456` 即可使用面板。
+构建后通过 `uv run agent-router dashboard` 启动独立面板，访问 `http://127.0.0.1:5173`。
 
 ## 开发
 
@@ -125,7 +169,9 @@ uv run ty src tests                    # 类型检查
 
 ```
 src/agent_router/
-├── main.py              # 入口：argparse + uvicorn
+├── main.py              # console_scripts 薄入口
+├── cli.py               # CLI 子命令：serve/dashboard/config/models/providers/calls/stats/doctor
+├── dashboard.py         # 独立 dashboard 静态服务 + API 代理
 ├── app.py               # FastAPI 应用 + 路由处理
 ├── config.py            # TOML 加载 + ${ENV_VAR} 展开 + Pydantic 校验
 ├── routing.py           # 核心：优先级链 + 故障转移

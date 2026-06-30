@@ -17,17 +17,22 @@ dependencies = [
     "aiosqlite>=0.21",
     "orjson>=3",
     "python-dotenv>=1.2.2",
+    "typer>=0.16",
 ]
 
 [project.scripts]
 agent-router = "agent_router.main:main"
+agent-router-dashboard = "agent_router.cli:dashboard_main"
 
 [tool.uv]
 package = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_router"]
-artifacts = ["dashboard/dist/**"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"config.toml.example" = "agent_router/config.toml.example"
+"dashboard/dist" = "agent_router/dashboard_dist"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

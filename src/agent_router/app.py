@@ -5,13 +5,11 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import httpx
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, StreamingResponse
 from structlog.contextvars import bind_contextvars, get_contextvars, unbind_contextvars
 
 from agent_router.api.config import create_config_router
@@ -289,9 +287,6 @@ def create_app(
             # 上下文（如 tenant / user id）；clear_contextvars 会清空全部 structlog 上下文。
             unbind_contextvars("request_id")
 
-    # 托管 dashboard 静态文件 (放在最后，避免覆盖 API 路由)
-    _mount_dashboard(app)
-
     return app
 
 
@@ -392,32 +387,3 @@ async def _stream_wrapper(
         # 解绑本 wrapper 绑定的 request_id，保持上下文对称清理。
         if request_id is not None:
             unbind_contextvars("request_id")
-
-
-def _mount_dashboard(app: FastAPI) -> None:
-    """挂载 dashboard 静态文件，支持 SPA 路由."""
-    dist = Path(__file__).parent.parent.parent / "dashboard" / "dist"
-    if not dist.is_dir():
-        dist = Path("dashboard") / "dist"  # CWD fallback for wheel installs
-    if not dist.is_dir():
-        return
-
-    # 先挂载静态资源
-    assets = dist / "assets"
-    if assets.is_dir():
-        app.mount(
-            "/assets", StaticFiles(directory=str(assets)), name="dashboard_assets"
-        )
-
-    # SPA fallback: 非 API 的 GET 请求返回 index.html
-    index_path = dist / "index.html"
-
-    @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
-        from fastapi.responses import Response
-
-        if full_path.startswith(("api/", "v1/")) or full_path == "health":
-            return Response(status_code=404)
-        if index_path.is_file():
-            return FileResponse(str(index_path))
-        return Response(status_code=404)

@@ -5,6 +5,17 @@ const routerPort = process.env.ROUTER_PORT || "9456";
 
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    chunkSizeWarningLimit: 650,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          charts: ["echarts"],
+          vue: ["@vueuse/core", "pinia", "vue", "vue-router"],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
