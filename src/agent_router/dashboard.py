@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,8 +9,7 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, Response
 
 DEFAULT_ROUTER_URL = "http://127.0.0.1:9456"
 
@@ -28,19 +28,19 @@ _HOP_BY_HOP_HEADERS: Final = {
 
 def find_dashboard_dist(explicit_path: str | Path | None = None) -> Path | None:
     """Return the first usable dashboard dist directory."""
-    candidates: list[Path] = []
-    if explicit_path:
-        candidates.append(Path(explicit_path))
+    if explicit_path is not None:
+        candidate = Path(explicit_path)
+        if (candidate / "index.html").is_file():
+            return candidate.resolve()
+        return None
 
     package_root = Path(__file__).resolve().parent
     repo_root = package_root.parent.parent
-    candidates.extend(
-        [
-            package_root / "dashboard_dist",
-            repo_root / "dashboard" / "dist",
-            Path.cwd() / "dashboard" / "dist",
-        ]
-    )
+    candidates = [
+        package_root / "dashboard_dist",
+        repo_root / "dashboard" / "dist",
+        Path.cwd() / "dashboard" / "dist",
+    ]
 
     for candidate in candidates:
         if (candidate / "index.html").is_file():
@@ -77,10 +77,6 @@ def create_dashboard_app(
         lifespan=lifespan,
     )
 
-    assets = dist / "assets"
-    if assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
-
     @app.api_route("/health", methods=_PROXY_METHODS)
     async def proxy_health(request: Request):
         return await _proxy_to_router(request, http_client)
@@ -98,17 +94,31 @@ def create_dashboard_app(
         if full_path.startswith(("api/", "v1/")) or full_path == "health":
             return Response(status_code=404)
 
-        # 解析后校验仍在 dist 内，避免 full_path 含 ".." 等片段穿越读取任意文件。
-        requested_file = (dist / full_path).resolve()
-        try:
-            requested_file.relative_to(dist)
-        except ValueError:
-            return FileResponse(str(index_path))
+        requested_file = _resolve_dist_file(dist, full_path)
+        if requested_file is None:
+            return _file_response(index_path)
         if requested_file.is_file():
-            return FileResponse(str(requested_file))
-        return FileResponse(str(index_path))
+            return _file_response(requested_file)
+        return _file_response(index_path)
 
     return app
+
+
+def _resolve_dist_file(dist: Path, request_path: str) -> Path | None:
+    requested_file = (dist / request_path).resolve()
+    try:
+        requested_file.relative_to(dist)
+    except ValueError:
+        return None
+    return requested_file
+
+
+def _file_response(path: Path) -> Response:
+    media_type, _ = mimetypes.guess_type(path.name)
+    return Response(
+        content=path.read_bytes(),
+        media_type=media_type or "application/octet-stream",
+    )
 
 
 async def _proxy_to_router(
@@ -124,7 +134,10 @@ async def _proxy_to_router(
             request.method,
             path,
             content=await request.body(),
-            headers=_filtered_headers(request.headers.items()),
+            headers=[
+                *_filtered_headers(request.headers.items()),
+                ("accept-encoding", "identity"),
+            ],
         )
     except asyncio.CancelledError:
         return Response(status_code=499)
@@ -152,6 +165,8 @@ def _filtered_headers(
 ) -> list[tuple[str, str]]:
     blocked = set(_HOP_BY_HOP_HEADERS)
     blocked.add("content-length")
-    if not response:
-        blocked.add("host")
+    if response:
+        blocked.add("content-encoding")
+    else:
+        blocked.update({"accept-encoding", "host"})
     return [(key, value) for key, value in headers if key.lower() not in blocked]

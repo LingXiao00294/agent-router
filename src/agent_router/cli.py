@@ -192,7 +192,7 @@ def dashboard_command(
     dist: str | None = typer.Option(
         None,
         "--dist",
-        help="dashboard/dist 静态文件目录；默认自动查找源码目录或已安装包内资源",
+        help="dashboard/dist 静态文件目录；默认自动查找构建目录",
     ),
     log_level: LogLevel = typer.Option(
         LogLevel.info,
@@ -233,7 +233,7 @@ def standalone_dashboard_command(
     dist: str | None = typer.Option(
         None,
         "--dist",
-        help="dashboard/dist 静态文件目录；默认自动查找源码目录或已安装包内资源",
+        help="dashboard/dist 静态文件目录；默认自动查找构建目录",
     ),
     log_level: LogLevel = typer.Option(
         LogLevel.info,
@@ -530,7 +530,7 @@ def command_dashboard(args: SimpleNamespace) -> int:
     if dist is None:
         print(
             "错误: 未找到 dashboard 静态文件。请先执行 `cd dashboard && bun install && "
-            "bun run build`，或使用包含 dashboard/dist 的安装包。",
+            "bun run build`，再从项目根目录启动，或使用 --dist 指向构建目录。",
             file=sys.stderr,
         )
         return 1
@@ -1004,7 +1004,9 @@ def _model_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
     for virtual_model, refs in sorted(models.items()):
         if not isinstance(refs, list):
             continue
-        model_refs = [cast(dict[str, Any], ref) for ref in refs if isinstance(ref, dict)]
+        model_refs = [
+            cast(dict[str, Any], ref) for ref in refs if isinstance(ref, dict)
+        ]
         for model_ref in sorted(model_refs, key=lambda item: item.get("priority", 99)):
             rows.append(
                 {

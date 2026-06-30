@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import pytest
+from typing import cast
+
 import httpx
+import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_router import dashboard as dashboard_module
 from agent_router.dashboard import create_dashboard_app, find_dashboard_dist
 
 
@@ -23,6 +26,17 @@ def test_find_dashboard_dist_accepts_explicit_path(tmp_path):
     dist = _create_dist(tmp_path)
 
     assert find_dashboard_dist(dist) == dist.resolve()
+
+
+def test_find_dashboard_dist_rejects_invalid_explicit_path_without_fallback(
+    tmp_path, monkeypatch
+):
+    _create_dist(tmp_path / "dashboard")
+    broken_dist = tmp_path / "broken-dist"
+    broken_dist.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert find_dashboard_dist(broken_dist) is None
 
 
 @pytest.mark.asyncio
@@ -58,7 +72,60 @@ async def test_dashboard_proxies_router_api(tmp_path, httpx_mock):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/metrics/summary")
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
+    assert response.json() == {"total_calls": 0}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_proxy_strips_decoded_content_encoding(tmp_path, monkeypatch):
+    dist = _create_dist(tmp_path)
+    seen: dict[str, object] = {}
+
+    class FakeRouterResponse:
+        content = b'{"total_calls":0}'
+        status_code = 200
+        headers = {
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+        }
+
+    class FakeRouterClient:
+        def __init__(self, **kwargs: object) -> None:
+            seen["init"] = kwargs
+
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            content: bytes,
+            headers: list[tuple[str, str]],
+        ) -> FakeRouterResponse:
+            seen["request"] = {
+                "method": method,
+                "path": path,
+                "content": content,
+                "headers": headers,
+            }
+            return FakeRouterResponse()
+
+        async def aclose(self) -> None:
+            seen["closed"] = True
+
+    monkeypatch.setattr(dashboard_module.httpx, "AsyncClient", FakeRouterClient)
+    app = create_dashboard_app(dist, router_base_url="http://router.local")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/metrics/summary")
+
+    upstream_request = cast(dict[str, object], seen["request"])
+    assert isinstance(upstream_request, dict)
+    upstream_headers = cast(list[tuple[str, str]], upstream_request["headers"])
+    request_headers = {key.lower(): value for key, value in upstream_headers}
+    assert request_headers["accept-encoding"] == "identity"
+    assert response.status_code == 200, response.text
+    assert "content-encoding" not in response.headers
     assert response.json() == {"total_calls": 0}
 
 
