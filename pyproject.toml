@@ -28,7 +28,6 @@ agent-router-dashboard = "agent_router.cli:dashboard_main"
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_router"]
 only-include = ["src/agent_router", "dashboard/dist"]
 artifacts = ["dashboard/dist/**"]
 
@@ -36,9 +35,27 @@ artifacts = ["dashboard/dist/**"]
 "config.toml.example" = "agent_router/config.toml.example"
 
 [tool.hatch.build.targets.wheel.sources]
+"src" = ""
 "dashboard/dist" = "agent_router/dashboard_dist"
 
 [tool.hatch.build.targets.sdist]
+include = [
+    "/.claude",
+    "/.env.example",
+    "/.github",
+    "/.gitignore",
+    "/.python-version",
+    "/CLAUDE.md",
+    "/README.md",
+    "/config.toml.example",
+    "/dashboard",
+    "/docs",
+    "/pyproject.toml",
+    "/scripts",
+    "/src",
+    "/tests",
+    "/uv.lock",
+]
 artifacts = ["dashboard/dist/**"]
 
 [tool.pytest.ini_options]
