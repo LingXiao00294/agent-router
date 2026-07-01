@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import cast
 
 import httpx
@@ -127,6 +128,92 @@ async def test_dashboard_proxy_strips_decoded_content_encoding(tmp_path, monkeyp
     assert response.status_code == 200, response.text
     assert "content-encoding" not in response.headers
     assert response.json() == {"total_calls": 0}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_streams_v1_messages_without_buffering(tmp_path, monkeypatch):
+    dist = _create_dist(tmp_path)
+    seen: dict[str, object] = {}
+
+    class FakeRouterStreamResponse:
+        status_code = 200
+        headers = {
+            "content-encoding": "gzip",
+            "content-type": "text/event-stream",
+        }
+
+        async def aiter_bytes(self):
+            seen["iterated"] = True
+            yield b"event: message_start\n"
+            yield b"data: {}\n\n"
+
+    class FakeRouterStream:
+        async def __aenter__(self) -> FakeRouterStreamResponse:
+            seen["entered"] = True
+            return FakeRouterStreamResponse()
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            seen["closed"] = True
+
+    class FakeRouterClient:
+        def __init__(self, **kwargs: object) -> None:
+            seen["init"] = kwargs
+
+        async def request(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("streaming messages must not use buffered request()")
+
+        def stream(
+            self,
+            method: str,
+            path: str,
+            *,
+            content: bytes,
+            headers: list[tuple[str, str]],
+        ) -> FakeRouterStream:
+            seen["stream"] = {
+                "method": method,
+                "path": path,
+                "content": content,
+                "headers": headers,
+            }
+            return FakeRouterStream()
+
+        async def aclose(self) -> None:
+            seen["client_closed"] = True
+
+    monkeypatch.setattr(dashboard_module.httpx, "AsyncClient", FakeRouterClient)
+    app = create_dashboard_app(dist, router_base_url="http://router.local")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client.stream(
+            "POST",
+            "/v1/messages",
+            json={"model": "claude", "stream": True},
+        ) as response:
+            chunks = [chunk async for chunk in response.aiter_bytes()]
+
+    upstream_request = cast(dict[str, object], seen["stream"])
+    upstream_headers = cast(list[tuple[str, str]], upstream_request["headers"])
+    request_headers = {key.lower(): value for key, value in upstream_headers}
+    body = json.loads(cast(bytes, upstream_request["content"]))
+
+    assert upstream_request["method"] == "POST"
+    assert upstream_request["path"] == "/v1/messages"
+    assert body["stream"] is True
+    assert request_headers["accept-encoding"] == "identity"
+    assert seen["entered"] is True
+    assert seen["iterated"] is True
+    assert seen["closed"] is True
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "content-encoding" not in response.headers
+    assert b"".join(chunks) == b"event: message_start\ndata: {}\n\n"
 
 
 @pytest.mark.asyncio

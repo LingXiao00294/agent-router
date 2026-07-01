@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import mimetypes
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 DEFAULT_ROUTER_URL = "http://127.0.0.1:9456"
 
@@ -128,16 +129,17 @@ async def _proxy_to_router(
     path = request.url.path
     if request.url.query:
         path = f"{path}?{request.url.query}"
+    body = await request.body()
+
+    if _is_streaming_messages_request(request, body):
+        return await _stream_from_router(request, http_client, path, body)
 
     try:
         upstream = await http_client.request(
             request.method,
             path,
-            content=await request.body(),
-            headers=[
-                *_filtered_headers(request.headers.items()),
-                ("accept-encoding", "identity"),
-            ],
+            content=body,
+            headers=_router_request_headers(request),
         )
     except asyncio.CancelledError:
         return Response(status_code=499)
@@ -156,6 +158,65 @@ async def _proxy_to_router(
         status_code=upstream.status_code,
         headers=dict(_filtered_headers(upstream.headers.items(), response=True)),
     )
+
+
+def _is_streaming_messages_request(request: Request, body: bytes) -> bool:
+    if request.method != "POST" or request.url.path != "/v1/messages":
+        return False
+
+    try:
+        payload = json.loads(body or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("stream") is True
+
+
+async def _stream_from_router(
+    request: Request,
+    http_client: httpx.AsyncClient,
+    path: str,
+    body: bytes,
+) -> Response:
+    upstream_context = http_client.stream(
+        request.method,
+        path,
+        content=body,
+        headers=_router_request_headers(request),
+    )
+    try:
+        upstream = await upstream_context.__aenter__()
+    except asyncio.CancelledError:
+        return Response(status_code=499)
+    except httpx.RequestError as exc:
+        return JSONResponse(
+            {
+                "detail": (
+                    "dashboard 无法连接到 router API，"
+                    f"请确认 router 已启动且 --router-url 配置正确: {exc}"
+                )
+            },
+            status_code=502,
+        )
+
+    async def body_iterator():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream_context.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        body_iterator(),
+        status_code=upstream.status_code,
+        headers=dict(_filtered_headers(upstream.headers.items(), response=True)),
+    )
+
+
+def _router_request_headers(request: Request) -> list[tuple[str, str]]:
+    return [
+        *_filtered_headers(request.headers.items()),
+        ("accept-encoding", "identity"),
+    ]
 
 
 def _filtered_headers(
