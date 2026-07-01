@@ -530,7 +530,7 @@ def command_dashboard(args: SimpleNamespace) -> int:
     if dist is None:
         print(
             "错误: 未找到 dashboard 静态文件。请先执行 `cd dashboard && bun install && "
-            "bun run build`，再从项目根目录启动，或使用 --dist 指向构建目录。",
+            "bun run build` 后重新安装，或使用 --dist 指向构建目录。",
             file=sys.stderr,
         )
         return 1

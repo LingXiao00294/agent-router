@@ -32,9 +32,14 @@ curl http://127.0.0.1:9456/health
 
 router 默认监听 `http://127.0.0.1:9456`，dashboard 默认监听 `http://127.0.0.1:5173` 并代理到 router。
 
-也可以安装成用户级工具：
+也可以先构建 dashboard，再安装成用户级工具：
 
 ```bash
+cd dashboard
+bun install
+bun run build
+cd ..
+
 uv tool install .
 agent-router serve
 agent-router-dashboard
@@ -71,7 +76,7 @@ uv run agent-router calls list --db calls.db --limit 20 --status error
 uv run agent-router calls show <call-id> --db calls.db --format json
 ```
 
-`config init` 默认从 `config.toml.example` 生成 `config.toml`，目标文件已存在时不会覆盖；确需覆盖时添加 `--force`。`config validate`、`doctor` 和 `serve` 默认加载 `.env`，可用 `--no-env-file` 跳过。`dashboard` 默认查找已构建的 `dashboard/dist`，找不到时需要先执行 `cd dashboard && bun install && bun run build`，或通过 `--dist` 指向构建目录。
+`config init` 默认从 `config.toml.example` 生成 `config.toml`，目标文件已存在时不会覆盖；确需覆盖时添加 `--force`。`config validate`、`doctor` 和 `serve` 默认加载 `.env`，可用 `--no-env-file` 跳过。`dashboard` 默认查找安装包内或源码目录下已构建的 `dashboard/dist`；找不到时需要先执行 `cd dashboard && bun install && bun run build` 后重新安装，或通过 `--dist` 指向构建目录。
 
 ### 配合 Claude Code 使用
 
