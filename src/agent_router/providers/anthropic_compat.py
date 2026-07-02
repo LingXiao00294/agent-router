@@ -69,6 +69,7 @@ class AnthropicCompatProvider(BaseProvider):
     async def send_stream(self, request_body: dict) -> AsyncIterator[bytes]:
         url = f"{self.config.base_url}/v1/messages"
         headers = self._build_headers(request_body)
+        headers["Accept-Encoding"] = "identity"
         modified_body = {**self._prepare_body(request_body), "stream": True}
 
         try:
@@ -96,7 +97,6 @@ class AnthropicCompatProvider(BaseProvider):
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": request_body.get("anthropic_version", "2023-06-01"),
-            "Accept-Encoding": "identity",
         }
         # 尝试多种认证 header 格式
         if self.config.api_key.startswith("sk-ant"):

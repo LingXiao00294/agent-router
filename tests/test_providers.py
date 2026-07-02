@@ -43,7 +43,7 @@ class TestAnthropicCompatProvider:
         headers = provider._build_headers(body)
         assert headers["x-api-key"] == "sk-ant-test-key"
         assert headers["Content-Type"] == "application/json"
-        assert headers["Accept-Encoding"] == "identity"
+        assert "Accept-Encoding" not in headers
 
     def test_build_headers_with_bearer_key(self, http_client):
         config = ProviderConfig(
@@ -92,6 +92,31 @@ class TestAnthropicCompatProvider:
             provider = AnthropicCompatProvider(config, client)
             with pytest.raises(RetryableError):
                 await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+
+    @pytest.mark.asyncio
+    async def test_send_uses_default_accept_encoding(self):
+        """非流式请求不强制 identity，避免大 JSON 响应失去压缩。"""
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["headers"] = dict(request.headers)
+            return httpx.Response(200, json={"id": "msg_1", "usage": {}})
+
+        transport = httpx.MockTransport(handler)
+        config = ProviderConfig(
+            type="anthropic",
+            model="real-model",
+            api_key="sk-test",
+            base_url="https://api.example.com",
+            priority=1,
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            provider = AnthropicCompatProvider(config, client)
+            await provider.send({"model": "virtual", "max_tokens": 10, "messages": []})
+
+        headers = seen["headers"]
+        assert isinstance(headers, dict)
+        assert headers["accept-encoding"] != "identity"
 
     @pytest.mark.asyncio
     async def test_send_stream_requests_identity_encoding(self):
