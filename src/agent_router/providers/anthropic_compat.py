@@ -96,6 +96,7 @@ class AnthropicCompatProvider(BaseProvider):
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": request_body.get("anthropic_version", "2023-06-01"),
+            "Accept-Encoding": "identity",
         }
         # 尝试多种认证 header 格式
         if self.config.api_key.startswith("sk-ant"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 
 import httpx
 import pytest
@@ -42,6 +43,7 @@ class TestAnthropicCompatProvider:
         headers = provider._build_headers(body)
         assert headers["x-api-key"] == "sk-ant-test-key"
         assert headers["Content-Type"] == "application/json"
+        assert headers["Accept-Encoding"] == "identity"
 
     def test_build_headers_with_bearer_key(self, http_client):
         config = ProviderConfig(
@@ -90,6 +92,45 @@ class TestAnthropicCompatProvider:
             provider = AnthropicCompatProvider(config, client)
             with pytest.raises(RetryableError):
                 await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+
+    @pytest.mark.asyncio
+    async def test_send_stream_requests_identity_encoding(self):
+        """流式上游请求禁用压缩，避免 SSE 在解压层被聚合后才下发。"""
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["headers"] = dict(request.headers)
+            seen["body"] = request.read()
+            return httpx.Response(
+                200,
+                content=b"event: message_start\ndata: {}\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = ProviderConfig(
+            type="anthropic",
+            model="real-model",
+            api_key="sk-test",
+            base_url="https://api.example.com",
+            priority=1,
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            provider = AnthropicCompatProvider(config, client)
+            chunks = [
+                chunk
+                async for chunk in provider.send_stream(
+                    {"model": "virtual", "max_tokens": 10, "messages": []}
+                )
+            ]
+
+        headers = seen["headers"]
+        body = seen["body"]
+        assert isinstance(headers, dict)
+        assert isinstance(body, bytes)
+        assert headers["accept-encoding"] == "identity"
+        assert json.loads(body)["stream"] is True
+        assert b"".join(chunks) == b"event: message_start\ndata: {}\n\n"
 
     def test_strip_trailing_slash(self):
         config = ProviderConfig(
