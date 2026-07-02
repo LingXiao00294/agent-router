@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -12,6 +13,12 @@ from pydantic import BaseModel, Field, field_validator
 DEFAULT_LOG_FILE = "logs/agent-router.log"
 DEFAULT_LOG_MAX_BYTES = 10_000_000
 DEFAULT_LOG_BACKUP_COUNT = 5
+_UNRESOLVED_ENV_RE = re.compile(r"\$\{[^}]+}")
+
+
+def has_unresolved_env_var(value: str) -> bool:
+    """Return True when os.path.expandvars left ${ENV_VAR} references unresolved."""
+    return bool(_UNRESOLVED_ENV_RE.search(value))
 
 
 class ProviderDef(BaseModel):
@@ -26,9 +33,9 @@ class ProviderDef(BaseModel):
 
     @field_validator("api_key")
     @classmethod
-    def api_key_must_not_be_empty_or_unresolved(cls, v: str) -> str:
-        if not v or v.startswith("${"):
-            raise ValueError(f"环境变量未设置或未正确插值: {v}")
+    def api_key_must_not_be_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("api_key 不能为空")
         return v
 
     @field_validator("base_url")
@@ -95,7 +102,9 @@ def _expand_env_vars(raw: dict) -> dict:
     return expand(raw)
 
 
-def load_config(config_path: str | Path) -> AppConfig:
+def load_config(
+    config_path: str | Path, *, allow_unresolved_api_keys: bool = False
+) -> AppConfig:
     path = Path(config_path)
     if not path.exists():
         print(f"错误: 配置文件不存在: {path}", file=sys.stderr)
@@ -124,7 +133,15 @@ def load_config(config_path: str | Path) -> AppConfig:
     providers: dict[str, ProviderDef] = {}
     for name, pdata in providers_raw.items():
         try:
-            providers[name] = ProviderDef(**pdata)
+            provider = ProviderDef(**pdata)
+            if (
+                not allow_unresolved_api_keys
+                and has_unresolved_env_var(provider.api_key)
+            ):
+                raise ValueError(
+                    f"环境变量未设置或未正确插值: {provider.api_key}"
+                )
+            providers[name] = provider
         except Exception as e:
             print(f"错误: 解析 provider '{name}' 配置失败: {e}", file=sys.stderr)
             sys.exit(1)

@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
-    "httpx>=0.28",
+    "httpx[socks]>=0.28",
     "pydantic>=2",
     "structlog>=25",
     "aiosqlite>=0.21",

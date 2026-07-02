@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any, cast
 
 from agent_router import cli
 from agent_router.db import SCHEMA
@@ -110,7 +111,7 @@ def test_dashboard_command_runs_separate_server(monkeypatch, tmp_path, capsys):
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text("<div>dashboard</div>", encoding="utf-8")
-    seen: dict[str, object] = {}
+    seen: dict[str, Any] = {}
 
     def fake_create_dashboard_app(dist_path, router_base_url):
         seen["dist"] = dist_path
@@ -226,6 +227,55 @@ def test_config_validate_outputs_route_summary(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "配置有效" in out
     assert "sonnet-router: p1:sonnet-first(p1) -> p2:sonnet-second(p2)" in out
+
+
+def test_serve_allows_unresolved_api_key_for_dashboard_setup(
+    monkeypatch, tmp_path, capsys
+):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[server]
+host = "127.0.0.1"
+port = 9456
+log_file = ""
+
+[providers.p1]
+type = "anthropic"
+api_key = "${MISSING_API_KEY_FOR_STARTUP_TEST}"
+base_url = "https://api.one.test"
+
+[[models.sonnet-router]]
+provider = "p1"
+model = "sonnet-first"
+priority = 1
+""",
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    def fake_uvicorn_run(app, **kwargs):
+        seen["app"] = app
+        seen["uvicorn"] = kwargs
+
+    monkeypatch.delenv("MISSING_API_KEY_FOR_STARTUP_TEST", raising=False)
+    monkeypatch.setattr(cli.uvicorn, "run", fake_uvicorn_run)
+
+    exit_code = cli.run(
+        [
+            "serve",
+            "--config",
+            str(config),
+            "--no-env-file",
+            "--db",
+            str(tmp_path / "calls.db"),
+        ]
+    )
+
+    assert exit_code == 0
+    uvicorn_kwargs = cast(dict[str, Any], seen["uvicorn"])
+    assert uvicorn_kwargs["host"] == "127.0.0.1"
+    assert "api_key 未解析" in capsys.readouterr().err
 
 
 def test_models_lists_routes_in_priority_order(tmp_path, capsys):

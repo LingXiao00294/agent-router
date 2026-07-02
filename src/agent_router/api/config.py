@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from collections.abc import Awaitable, Callable
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+
+from agent_router.config import has_unresolved_env_var
 
 
 def _mask_key(key: str) -> str:
@@ -28,6 +31,17 @@ def _is_key_masked(api_key: str) -> bool:
         if middle and all(c == "*" for c in middle):
             return True
     return False
+
+
+def _safe_key_fields(api_key: str) -> dict[str, object]:
+    expanded = os.path.expandvars(api_key)
+    unresolved = has_unresolved_env_var(expanded)
+    has_key = bool(expanded) and not unresolved
+    return {
+        "api_key": "" if unresolved else _mask_key(expanded),
+        "has_key": has_key,
+        "api_key_unresolved": unresolved,
+    }
 
 
 def _read_config_raw(config_path: str) -> dict:
@@ -140,8 +154,7 @@ def create_config_router(
         safe = deepcopy(raw)
         for pname, pdata in safe.get("providers", {}).items():
             if "api_key" in pdata:
-                pdata["has_key"] = bool(pdata["api_key"])
-                pdata["api_key"] = _mask_key(pdata["api_key"])
+                pdata.update(_safe_key_fields(str(pdata["api_key"])))
         return safe
 
     @router.get("/api/config/providers")
@@ -153,8 +166,8 @@ def create_config_router(
             result[pname] = {
                 "type": pdata.get("type", "anthropic"),
                 "base_url": pdata.get("base_url", ""),
-                "api_key": _mask_key(pdata.get("api_key", "")),
                 "timeout_seconds": pdata.get("timeout_seconds", 120.0),
+                **_safe_key_fields(str(pdata.get("api_key", ""))),
             }
         return result
 

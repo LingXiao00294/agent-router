@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from agent_router.config import AppConfig, ProviderConfig, ServerConfig
 from agent_router.routing import (
     Router,
     UnknownModelError,
@@ -31,6 +32,59 @@ class TestRouterModelLookup:
         names = router.model_names
         assert "haiku-router" in names
         assert "sonnet-router" in names
+
+    async def test_unresolved_api_key_provider_is_skipped(self, http_client):
+        config = AppConfig(
+            server=ServerConfig(),
+            models={
+                "m": [
+                    ProviderConfig(
+                        type="anthropic",
+                        name="missing",
+                        model="m1",
+                        api_key="${MISSING_KEY}",
+                        base_url="https://missing.test",
+                        priority=1,
+                    ),
+                    ProviderConfig(
+                        type="anthropic",
+                        name="ready",
+                        model="m2",
+                        api_key="sk-ready",
+                        base_url="https://ready.test",
+                        priority=2,
+                    ),
+                ]
+            },
+        )
+        router = Router(config, http_client)
+
+        providers = await router._get_providers("m")
+
+        assert [p.name for p in providers] == ["ready"]
+
+    async def test_all_unresolved_api_keys_fail_with_clear_error(self, http_client):
+        config = AppConfig(
+            server=ServerConfig(),
+            models={
+                "m": [
+                    ProviderConfig(
+                        type="anthropic",
+                        name="missing",
+                        model="m1",
+                        api_key="${MISSING_KEY}",
+                        base_url="https://missing.test",
+                        priority=1,
+                    ),
+                ]
+            },
+        )
+        router = Router(config, http_client)
+
+        with pytest.raises(AllProvidersFailedError) as exc:
+            await router._get_providers("m")
+
+        assert "api_key 环境变量未设置或未正确插值" in str(exc.value)
 
 
 class TestAllProvidersFailedError:

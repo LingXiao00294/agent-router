@@ -14,8 +14,8 @@ Claude Code → router (本地 FastAPI) → 智谱 API      (优先级 1)
 # 1. 安装依赖
 uv sync
 
-# 2. 配置环境变量
-cp .env.example .env   # 编辑 .env，填入各 provider 的 API key
+# 2. 可选：配置环境变量
+cp .env.example .env   # 可先跳过，之后也可通过 dashboard 填写 API key
 
 # 3. 创建路由配置
 cp config.toml.example config.toml   # 可直接启动，之后通过 dashboard 添加 provider
@@ -76,7 +76,7 @@ uv run agent-router calls list --db calls.db --limit 20 --status error
 uv run agent-router calls show <call-id> --db calls.db --format json
 ```
 
-`config init` 默认从 `config.toml.example` 生成 `config.toml`，目标文件已存在时不会覆盖；确需覆盖时添加 `--force`。`config validate`、`doctor` 和 `serve` 默认加载 `.env`，可用 `--no-env-file` 跳过。`dashboard` 默认查找安装包内或源码目录下已构建的 `dashboard/dist`；找不到时需要先执行 `cd dashboard && bun install && bun run build` 后重新安装，或通过 `--dist` 指向构建目录。
+`config init` 默认从 `config.toml.example` 生成 `config.toml`，目标文件已存在时不会覆盖；确需覆盖时添加 `--force`。`config validate`、`doctor` 和 `serve` 默认加载 `.env`，可用 `--no-env-file` 跳过。`serve` 允许 `api_key = "${ENV_VAR}"` 暂未解析，以便新环境先启动后端和 dashboard；实际路由时这类 provider 会被跳过。`config validate` 仍按严格模式检查，适合在正式使用前确认环境变量和配置完整。`dashboard` 默认查找安装包内或源码目录下已构建的 `dashboard/dist`；找不到时需要先执行 `cd dashboard && bun install && bun run build` 后重新安装，或通过 `--dist` 指向构建目录。
 
 ### 配合 Claude Code 使用
 
@@ -131,7 +131,7 @@ model = "deepseek-v4-pro"
 priority = 2
 ```
 
-`${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
+`${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。未设置时不会阻止 `serve` 启动，方便先打开 dashboard 修改配置；包含未解析 key 的 provider 在实际请求路由时会被跳过，全部 provider 都不可用时返回明确错误。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
 
 ## API 端点
 
@@ -167,7 +167,7 @@ bun run build     # 生产构建 → dashboard/dist/
 uv run pytest                          # 运行测试
 uv run pytest tests/test_routing.py -v # 单个测试文件
 uv run ruff check src tests            # Lint
-uv run ty src tests                    # 类型检查
+uv run ty check src tests              # 类型检查
 ```
 
 ## 项目结构
