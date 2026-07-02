@@ -187,6 +187,29 @@ priority = 1
         finally:
             path.unlink()
 
+    def test_unresolved_env_var_allowed_for_runtime_startup(self):
+        toml = """
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[providers.p1]
+type = "anthropic"
+api_key = "${NONEXISTENT_ENV_VAR_12345}"
+base_url = "https://api.com"
+
+[[models.test]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path, allow_unresolved_api_keys=True)
+            assert config.models["test"][0].api_key == "${NONEXISTENT_ENV_VAR_12345}"
+        finally:
+            path.unlink()
+
     def test_multiple_virtual_models(self):
         toml = """
 [server]
@@ -430,6 +453,42 @@ class TestHotReloadAPI:
                 # 热重载后模型应已变化
                 resp = await ac.get("/v1/models")
                 assert resp.json()["data"][0]["id"] == "new-model"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_get_config_marks_unresolved_api_key_as_missing(
+        self, store, monkeypatch
+    ):
+        """未设置的环境变量占位符应允许页面直接填写 key."""
+        monkeypatch.delenv("NONEXISTENT_ENV_VAR_12345", raising=False)
+        toml = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[providers.p1]
+type = "anthropic"
+api_key = "${NONEXISTENT_ENV_VAR_12345}"
+base_url = "https://api.anthropic.com"
+
+[[models.m1]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path, allow_unresolved_api_keys=True)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.get("/api/config")
+                assert resp.status_code == 200
+                provider = resp.json()["providers"]["p1"]
+                assert provider["api_key"] == ""
+                assert provider["has_key"] is False
+                assert provider["api_key_unresolved"] is True
         finally:
             path.unlink(missing_ok=True)
 

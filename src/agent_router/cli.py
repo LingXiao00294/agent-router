@@ -18,7 +18,7 @@ import uvicorn
 from click import ClickException
 from dotenv import load_dotenv
 
-from agent_router.config import AppConfig, load_config
+from agent_router.config import AppConfig, has_unresolved_env_var, load_config
 from agent_router.dashboard import (
     DEFAULT_ROUTER_URL,
     create_dashboard_app,
@@ -485,9 +485,16 @@ def _invoke_typer(
 def command_serve(args: SimpleNamespace) -> int:
     """Start the FastAPI router service."""
     _load_env_file(args)
-    config, exit_code = _load_config(args.config)
+    config, exit_code = _load_config(args.config, allow_unresolved_api_keys=True)
     if config is None:
         return exit_code
+    unresolved = _unresolved_runtime_providers(config)
+    if unresolved:
+        print(
+            "警告: 以下 provider 的 api_key 未解析，路由请求会跳过它们: "
+            + ", ".join(unresolved),
+            file=sys.stderr,
+        )
 
     if args.host:
         config.server.host = args.host
@@ -761,7 +768,7 @@ def command_doctor(args: SimpleNamespace) -> int:
     else:
         checks.append(_check("error", "配置文件", f"不存在: {config_path}"))
 
-    config, exit_code = _load_config(args.config)
+    config, exit_code = _load_config(args.config, allow_unresolved_api_keys=True)
     if config is None:
         checks.append(_check("error", "配置语义", "校验失败"))
     else:
@@ -774,6 +781,15 @@ def command_doctor(args: SimpleNamespace) -> int:
         )
         if not config.models:
             checks.append(_check("warn", "路由模型", "未配置任何可用虚拟模型"))
+        unresolved = _unresolved_runtime_providers(config)
+        if unresolved:
+            checks.append(
+                _check(
+                    "warn",
+                    "Provider API Key",
+                    "未解析，将在路由时跳过: " + ", ".join(unresolved),
+                )
+            )
         if config.server.log_file:
             log_parent = Path(config.server.log_file).parent
             checks.append(
@@ -841,11 +857,28 @@ def _load_env_file(args: SimpleNamespace) -> None:
         load_dotenv(env_file)
 
 
-def _load_config(config_path: str) -> tuple[AppConfig | None, int]:
+def _load_config(
+    config_path: str, *, allow_unresolved_api_keys: bool = False
+) -> tuple[AppConfig | None, int]:
     try:
-        return load_config(config_path), 0
+        return (
+            load_config(
+                config_path,
+                allow_unresolved_api_keys=allow_unresolved_api_keys,
+            ),
+            0,
+        )
     except SystemExit as exc:
         return None, _system_exit_code(exc)
+
+
+def _unresolved_runtime_providers(config: AppConfig) -> list[str]:
+    unresolved: dict[str, str] = {}
+    for providers in config.models.values():
+        for provider in providers:
+            if has_unresolved_env_var(provider.api_key):
+                unresolved[provider.name] = provider.api_key
+    return [f"{name}({api_key})" for name, api_key in sorted(unresolved.items())]
 
 
 def _system_exit_code(exc: SystemExit) -> int:

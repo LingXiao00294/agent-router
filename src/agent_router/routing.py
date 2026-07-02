@@ -10,7 +10,7 @@ import structlog
 from structlog.contextvars import get_contextvars
 
 from agent_router.circuit_breaker import CircuitBreaker
-from agent_router.config import AppConfig, ProviderConfig
+from agent_router.config import AppConfig, ProviderConfig, has_unresolved_env_var
 from agent_router.providers.anthropic_compat import AnthropicCompatProvider
 from agent_router.providers.base import BaseProvider, NonRetryableError, RetryableError
 
@@ -357,6 +357,21 @@ class Router:
         skipped: list[dict] = []
 
         for p in all_providers:
+            if has_unresolved_env_var(p.api_key):
+                skipped.append(
+                    {
+                        "provider": p.name,
+                        "model": p.model,
+                        "reason": "unresolved_api_key",
+                        "error": (
+                            "api_key 环境变量未设置或未正确插值: "
+                            f"{p.api_key}"
+                        ),
+                        "retryable": False,
+                    }
+                )
+                continue
+
             if await self.circuit_breaker.is_available(
                 p.name, recovery_timeout=p.recovery_timeout
             ):
@@ -371,6 +386,7 @@ class Router:
                                 p.name, recovery_timeout=p.recovery_timeout
                             )
                         ).value,
+                        "retryable": True,
                     }
                 )
 
@@ -389,8 +405,10 @@ class Router:
                     {
                         "provider": s["provider"],
                         "model": s["model"],
-                        "error": f"provider 已熔断 (state={s['state']})",
-                        "retryable": True,
+                        "error": s["error"]
+                        if "error" in s
+                        else f"provider 已熔断 (state={s['state']})",
+                        "retryable": s.get("retryable", True),
                     }
                     for s in skipped
                 ],

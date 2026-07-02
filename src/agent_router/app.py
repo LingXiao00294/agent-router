@@ -75,7 +75,7 @@ def create_app(
     # 注册 config API
     async def _reload_config() -> None:
         try:
-            new_config = load_config(config_path)
+            new_config = load_config(config_path, allow_unresolved_api_keys=True)
         except SystemExit:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
         # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。

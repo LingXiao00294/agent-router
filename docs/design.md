@@ -134,7 +134,8 @@ priority = 2
 - 使用 `tomllib` 加载 TOML 配置文件
 - `os.path.expandvars()` 对 `api_key` 等字段做 `${ENV_VAR}` 插值
 - Pydantic 校验结构完整性
-- 环境变量未设置时启动失败，打印具体哪个模型/优先级出错
+- 运行时启动允许未解析 `${ENV_VAR}`，用于新环境先打开 dashboard 配置
+- 严格校验命令会在环境变量未设置时失败，并打印具体 provider
 
 **Pydantic 模型：**
 
@@ -512,7 +513,7 @@ dashboard 作为独立目录，后期完善。初期可以先只做 API 接口�
 | provider 返回 401/403 | 故障转移 + 立即熔断该 provider |
 | provider 连续返回 429/529/5xx | 故障转移 + 达阈值后熔断 |
 | 熔断 provider 恢复 | 60s 后半开探测，成功则关闭熔断器 |
-| 环境变量未设置 | 启动失败，明确指出哪个模型/优先级 |
+| 环境变量未设置 | `serve` 可启动；路由时跳过对应 provider；`config validate` 严格失败 |
 | provider 返回非 JSON | 不可重试，立即返回 502 |
 | 流传输中断 | 关闭客户端连接，日志记录 |
 | 客户端断开 | 取消上游请求 (asyncio.CancelledError) |
