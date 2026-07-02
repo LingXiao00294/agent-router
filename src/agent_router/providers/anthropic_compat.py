@@ -69,6 +69,7 @@ class AnthropicCompatProvider(BaseProvider):
     async def send_stream(self, request_body: dict) -> AsyncIterator[bytes]:
         url = f"{self.config.base_url}/v1/messages"
         headers = self._build_headers(request_body)
+        headers["Accept-Encoding"] = "identity"
         modified_body = {**self._prepare_body(request_body), "stream": True}
 
         try:
