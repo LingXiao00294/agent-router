@@ -7,7 +7,7 @@
             type="button"
             class="mode-btn"
             :class="{ active: configStore.routerConfig.mode === 'failover' }"
-            :disabled="modeSaving"
+            :disabled="modeSwitchDisabled"
             @click="switchMode('failover')"
           >
             故障转移
@@ -16,7 +16,7 @@
             type="button"
             class="mode-btn"
             :class="{ active: configStore.routerConfig.mode === 'sticky' }"
-            :disabled="modeSaving"
+            :disabled="modeSwitchDisabled"
             @click="switchMode('sticky')"
           >
             指定模型
@@ -101,6 +101,9 @@ const toast = useToast();
 const route = useRoute();
 const router = useRouter();
 const modeSaving = ref(false);
+const modeSwitchDisabled = computed(
+  () => modeSaving.value || configStore.loading || !configStore.configReady
+);
 
 const trendDays = ref(30);
 const modelFilterRef = ref<InstanceType<typeof ModelFilter> | null>(null);
@@ -149,7 +152,14 @@ async function refresh(silent = false) {
 }
 
 async function switchMode(mode: "failover" | "sticky") {
-  if (configStore.routerConfig.mode === mode || modeSaving.value) return;
+  if (
+    configStore.routerConfig.mode === mode ||
+    modeSaving.value ||
+    configStore.loading ||
+    !configStore.configReady
+  ) {
+    return;
+  }
   modeSaving.value = true;
   try {
     const ok = await configStore.setRouterMode(mode);

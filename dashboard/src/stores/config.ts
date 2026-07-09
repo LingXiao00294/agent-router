@@ -72,6 +72,8 @@ export const useConfigStore = defineStore("config", () => {
   const resetting = ref<string | null>(null);
 
   const loading = ref(false);
+  /** 至少成功加载过一次配置；未就绪时禁止模式开关，避免用空默认值覆盖服务端 */
+  const configReady = ref(false);
   const saving = ref(false);
   const error = ref<string | null>(null);
   const validationErrors = ref<Record<string, string>>({});
@@ -172,6 +174,7 @@ export const useConfigStore = defineStore("config", () => {
 
       await loadCircuitStates();
       snapshot();
+      configReady.value = true;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "加载配置失败";
       throw err;
@@ -242,11 +245,13 @@ export const useConfigStore = defineStore("config", () => {
           model: r.model,
           priority: i + 1,
         }));
-      models[m.name] = {
-        pinned_provider: m.pinned_provider,
-        pinned_model: m.pinned_model,
-        providers: providersList,
-      };
+      // failover 不提交过期 pin，避免改 ref 后 pin 不匹配导致后端校验失败
+      const modelCfg: VirtualModelConfig = { providers: providersList };
+      if (routerConfig.value.mode === "sticky") {
+        modelCfg.pinned_provider = m.pinned_provider;
+        modelCfg.pinned_model = m.pinned_model;
+      }
+      models[m.name] = modelCfg;
     }
 
     return {
@@ -420,6 +425,11 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function setRouterMode(mode: "failover" | "sticky"): Promise<boolean> {
+    if (!configReady.value || loading.value) {
+      error.value = "配置尚未加载完成，请稍后再试";
+      return false;
+    }
+
     const previousMode = routerConfig.value.mode;
     const previousPins = modelEntries.value.map((m) => ({
       id: m.id,
@@ -487,6 +497,7 @@ export const useConfigStore = defineStore("config", () => {
     circuitError,
     resetting,
     loading,
+    configReady,
     saving,
     error,
     validationErrors,

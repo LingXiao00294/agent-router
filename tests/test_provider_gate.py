@@ -171,3 +171,50 @@ class TestProviderGateCooldown:
         release.set()
         await task
         await wait_task
+
+    async def test_queued_waiter_rechecks_cooldown(self):
+        """持有者进入冷却并释放槽位后，排队者应收到冷却错误而非立刻打上游."""
+        gate = ProviderGate()
+        cfg = _cfg(max_concurrent=1, max_queue=2, queue_wait_timeout=2.0)
+        entered = asyncio.Event()
+
+        async def holder():
+            async with gate.slot(cfg):
+                entered.set()
+                await asyncio.sleep(0.05)
+                gate.enter_cooldown("p1", 30.0)
+
+        task = asyncio.create_task(holder())
+        await entered.wait()
+        with pytest.raises(ProviderCooldownError):
+            async with gate.slot(cfg):
+                pass
+        await task
+        assert gate.snapshot()["p1"]["waiting"] == 0
+
+    async def test_cancel_while_queued_decrements_waiting(self):
+        gate = ProviderGate()
+        cfg = _cfg(max_concurrent=1, max_queue=2, queue_wait_timeout=5.0)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def holder():
+            async with gate.slot(cfg):
+                entered.set()
+                await release.wait()
+
+        async def waiter():
+            async with gate.slot(cfg):
+                pass
+
+        hold_task = asyncio.create_task(holder())
+        await entered.wait()
+        wait_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        assert gate.snapshot()["p1"]["waiting"] == 1
+        wait_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await wait_task
+        assert gate.snapshot()["p1"]["waiting"] == 0
+        release.set()
+        await hold_task

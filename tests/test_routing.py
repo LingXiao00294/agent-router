@@ -353,12 +353,18 @@ class TestRateLimitRouting:
         def handler(request: httpx.Request) -> httpx.Response:
             calls["n"] += 1
             if "p1" in str(request.url):
-                body = (
-                    b'event: message_start\ndata: {"type":"message_start","message":{}}\n\n'
-                    b'event: error\ndata: {"type":"error","error":'
-                    b'{"type":"api_error","message":"mid"}}\n\n'
-                )
-                return httpx.Response(200, content=body)
+                # 分 chunk 返回，确保 message_start 先 yield 后再出现流内错误
+                async def body():
+                    yield (
+                        b'event: message_start\ndata: '
+                        b'{"type":"message_start","message":{}}\n\n'
+                    )
+                    yield (
+                        b'event: error\ndata: {"type":"error","error":'
+                        b'{"type":"api_error","message":"mid"}}\n\n'
+                    )
+
+                return httpx.Response(200, content=body())
             return httpx.Response(
                 200,
                 content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
@@ -400,3 +406,58 @@ class TestRateLimitRouting:
                     chunks.append(chunk)
             assert chunks  # 已 yield 过
             assert calls["n"] == 1  # 未打到 p2
+
+    async def test_stream_error_before_yield_allows_failover(self, http_client):
+        """首包即为 event:error 时不应先发给客户端，应可 failover."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if "p1" in str(request.url):
+                body = (
+                    b'event: error\ndata: {"type":"error","error":'
+                    b'{"type":"api_error","message":"first"}}\n\n'
+                )
+                return httpx.Response(200, content=body)
+            return httpx.Response(
+                200,
+                content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            chunks: list[bytes] = []
+            async for chunk in router.route_stream(
+                {"model": "m", "max_tokens": 10, "messages": [], "stream": True}
+            ):
+                chunks.append(chunk)
+            assert calls["n"] == 2
+            assert chunks
+            assert b"message_start" in chunks[0]
+            assert b"event: error" not in b"".join(chunks)

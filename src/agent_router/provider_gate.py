@@ -132,6 +132,8 @@ class ProviderGate:
             cooldown_seconds=round(duration, 2),
             remaining_seconds=round(remaining, 2),
         )
+        # 唤醒排队者，使其重新检查冷却并退出队列
+        self._schedule_notify(state)
         return remaining
 
     def clear_cooldown(self, name: str) -> None:
@@ -156,6 +158,10 @@ class ProviderGate:
     def _has_slot(self, state: _GateState) -> bool:
         return state.max_concurrent <= 0 or state.in_flight < state.max_concurrent
 
+    def _ready_or_cooling(self, name: str, state: _GateState) -> bool:
+        """排队唤醒条件：有空位，或已进入冷却（需退出队列）."""
+        return self._has_slot(state) or self.cooldown_remaining(name) > 0
+
     @asynccontextmanager
     async def slot(self, provider: ProviderConfig) -> AsyncIterator[None]:
         """占用一个并发槽位；必要时排队等待.
@@ -168,7 +174,7 @@ class ProviderGate:
         async with state.condition:
             self._apply_limits(state, provider)
 
-            remaining = max(0.0, state.cooldown_until - time.monotonic())
+            remaining = self.cooldown_remaining(name)
             if remaining > 0:
                 raise ProviderCooldownError(name, remaining)
 
@@ -191,17 +197,31 @@ class ProviderGate:
                 wait_timeout = state.queue_wait_timeout
                 try:
                     await asyncio.wait_for(
-                        state.condition.wait_for(lambda: self._has_slot(state)),
+                        state.condition.wait_for(
+                            lambda: self._ready_or_cooling(name, state)
+                        ),
                         timeout=wait_timeout,
                     )
                 except TimeoutError:
-                    state.waiting = max(0, state.waiting - 1)
                     raise ProviderCapacityError(
                         name,
                         f"provider '{name}' 排队等待超时 ({wait_timeout}s)",
                         retry_after=wait_timeout,
                     ) from None
-                state.waiting = max(0, state.waiting - 1)
+                finally:
+                    # 超时、取消、成功唤醒都要减 waiting，避免计数泄漏
+                    state.waiting = max(0, state.waiting - 1)
+
+                # 唤醒后重新检查冷却（持有 slot 的请求可能刚触发 429）
+                remaining = self.cooldown_remaining(name)
+                if remaining > 0:
+                    raise ProviderCooldownError(name, remaining)
+                if not self._has_slot(state):
+                    raise ProviderCapacityError(
+                        name,
+                        f"provider '{name}' 并发已满且未启用排队",
+                        retry_after=state.queue_wait_timeout,
+                    )
                 state.in_flight += 1
 
         try:
