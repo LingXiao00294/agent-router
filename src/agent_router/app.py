@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
@@ -72,6 +73,7 @@ def create_app(
     )
 
     router_engine = Router(config, http_client)
+    app.state.router_engine = router_engine
 
     # 注册 metrics API
     metrics_router = create_metrics_router(store)
@@ -84,7 +86,7 @@ def create_app(
         except SystemExit:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
         # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
-        await router_engine.reload_config(new_config)
+        await app.state.router_engine.reload_config(new_config)
         reconfigure_logging(
             level=new_config.server.log_level,
             log_file=new_config.server.log_file,
@@ -102,13 +104,13 @@ def create_app(
     @app.get("/api/circuit-breaker")
     async def get_circuit_breaker_states():
         """返回所有 provider 的熔断状态."""
-        states = await router_engine.circuit_breaker.get_all_states()
+        states = await app.state.router_engine.circuit_breaker.get_all_states()
         return {name: state.value for name, state in states.items()}
 
     @app.post("/api/circuit-breaker/{provider}/reset")
     async def reset_circuit_breaker(provider: str):
         """重置指定 provider 的熔断状态."""
-        await router_engine.circuit_breaker.reset(provider)
+        await app.state.router_engine.circuit_breaker.reset(provider)
         return {"status": "ok", "provider": provider}
 
     @app.get("/v1/models")
@@ -122,7 +124,7 @@ def create_app(
                     "display_name": name,
                     "created_at": "2025-01-01T00:00:00Z",
                 }
-                for name in router_engine.model_names
+                for name in app.state.router_engine.model_names
             ]
         }
 
@@ -137,13 +139,41 @@ def create_app(
         # 中间件返回后才被 ASGI 消费，此时中间件已 unbind request_id，
         # routing 层会 fallback 到新 uuid 而与 http.request 日志断链。
         request_id = get_contextvars().get("request_id")
+        engine: Router = request.app.state.router_engine
 
         try:
             if is_stream:
                 outcome: dict = {}
+                # 预取首个 chunk：若在向客户端发送前就失败（冷却/容量/全失败），
+                # 返回真正的 HTTP 429/503/502 + Retry-After，而不是 SSE 内嵌错误。
+                stream_agen = engine.route_stream(body, outcome)
+                try:
+                    first_chunk = await anext(stream_agen)
+                except StopAsyncIteration:
+                    first_chunk = None
+                except NoProviderAvailableError as e:
+                    await stream_agen.aclose()
+                    return await _no_provider_response(
+                        e, store, virtual_model, body, start_time
+                    )
+                except AllProvidersFailedError as e:
+                    await stream_agen.aclose()
+                    return await _all_failed_response(
+                        e, store, virtual_model, body, start_time
+                    )
+                except UnknownModelError:
+                    await stream_agen.aclose()
+                    raise
+
+                async def _prepended():
+                    if first_chunk is not None:
+                        yield first_chunk
+                    async for chunk in stream_agen:
+                        yield chunk
+
                 return StreamingResponse(
                     _stream_wrapper(
-                        router_engine.route_stream(body, outcome),
+                        _prepended(),
                         outcome=outcome,
                         store=store,
                         virtual_model=virtual_model,
@@ -160,7 +190,7 @@ def create_app(
                 )
             else:
                 outcome: dict = {}
-                result = await router_engine.route_non_stream(body, outcome)
+                result = await engine.route_non_stream(body, outcome)
                 latency_ms = int((time.time() - start_time) * 1000)
                 usage = result.get("usage", {})
                 await store.record(
@@ -203,70 +233,12 @@ def create_app(
             )
 
         except NoProviderAvailableError as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            failover = [
-                {
-                    "provider": err["provider"],
-                    "model": err["model"],
-                    "error": err["error"],
-                }
-                for err in e.errors
-            ]
-            status_code = 503 if e.kind == "capacity" else 429
-            error_type = (
-                "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
-            )
-            await store.record(
-                virtual_model=virtual_model,
-                status="error",
-                error_type=error_type,
-                error_message=str(e),
-                latency_ms=latency_ms,
-                request_body=body,
-                failover_details=failover,
-            )
-            headers = {}
-            if e.retry_after is not None:
-                headers["Retry-After"] = str(max(1, int(e.retry_after)))
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": error_type,
-                        "message": str(e),
-                    }
-                },
-                status_code=status_code,
-                headers=headers,
+            return await _no_provider_response(
+                e, store, virtual_model, body, start_time
             )
 
         except AllProvidersFailedError as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            failover = [
-                {
-                    "provider": err["provider"],
-                    "model": err["model"],
-                    "error": err["error"],
-                }
-                for err in e.errors
-            ]
-            await store.record(
-                virtual_model=virtual_model,
-                status="error",
-                error_type="all_providers_failed",
-                error_message=str(e),
-                latency_ms=latency_ms,
-                request_body=body,
-                failover_details=failover,
-            )
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": "api_error",
-                        "message": str(e),
-                    }
-                },
-                status_code=502,
-            )
+            return await _all_failed_response(e, store, virtual_model, body, start_time)
 
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
@@ -330,6 +302,84 @@ def create_app(
             unbind_contextvars("request_id")
 
     return app
+
+
+async def _no_provider_response(
+    e: NoProviderAvailableError,
+    store: CallStore,
+    virtual_model: str,
+    body: dict,
+    start_time: float,
+) -> JSONResponse:
+    latency_ms = int((time.time() - start_time) * 1000)
+    failover = [
+        {
+            "provider": err["provider"],
+            "model": err["model"],
+            "error": err["error"],
+        }
+        for err in e.errors
+    ]
+    status_code = 503 if e.kind == "capacity" else 429
+    error_type = "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
+    await store.record(
+        virtual_model=virtual_model,
+        status="error",
+        error_type=error_type,
+        error_message=str(e),
+        latency_ms=latency_ms,
+        request_body=body,
+        failover_details=failover,
+    )
+    headers = {}
+    if e.retry_after is not None:
+        headers["Retry-After"] = str(max(1, math.ceil(e.retry_after)))
+    return JSONResponse(
+        {
+            "error": {
+                "type": error_type,
+                "message": str(e),
+            }
+        },
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+async def _all_failed_response(
+    e: AllProvidersFailedError,
+    store: CallStore,
+    virtual_model: str,
+    body: dict,
+    start_time: float,
+) -> JSONResponse:
+    latency_ms = int((time.time() - start_time) * 1000)
+    failover = [
+        {
+            "provider": err["provider"],
+            "model": err["model"],
+            "error": err["error"],
+        }
+        for err in e.errors
+    ]
+    await store.record(
+        virtual_model=virtual_model,
+        status="error",
+        error_type="all_providers_failed",
+        error_message=str(e),
+        latency_ms=latency_ms,
+        request_body=body,
+        failover_details=failover,
+    )
+    return JSONResponse(
+        {
+            "error": {
+                "type": "api_error",
+                "message": str(e),
+            }
+        },
+        status_code=502,
+    )
 
 
 async def _stream_wrapper(
@@ -415,11 +465,17 @@ async def _stream_wrapper(
             request_body=request_body,
             failover_details=failover,
         )
+        if isinstance(e, NoProviderAvailableError):
+            err_type = (
+                "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
+            )
+        else:
+            err_type = "api_error"
         error_body = json.dumps(
             {
                 "type": "error",
                 "error": {
-                    "type": "api_error",
+                    "type": err_type,
                     "message": str(e),
                 },
             }

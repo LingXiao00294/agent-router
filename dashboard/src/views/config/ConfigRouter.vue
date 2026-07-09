@@ -43,7 +43,17 @@ function touch(_path: string) {
 }
 
 function onModeChange(value: string) {
-  configStore.routerConfig.mode = value === "sticky" ? "sticky" : "failover";
+  const mode = value === "sticky" ? "sticky" : "failover";
+  if (mode === "sticky") {
+    for (const m of configStore.modelEntries) {
+      if (!m.pinned_provider && m.refs.length > 0) {
+        const first = m.refs[0];
+        m.pinned_provider = first?.provider || null;
+        m.pinned_model = first?.model || null;
+      }
+    }
+  }
+  configStore.routerConfig.mode = mode;
   touch("router.mode");
 }
 </script>

@@ -420,6 +420,13 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function setRouterMode(mode: "failover" | "sticky"): Promise<boolean> {
+    const previousMode = routerConfig.value.mode;
+    const previousPins = modelEntries.value.map((m) => ({
+      id: m.id,
+      pinned_provider: m.pinned_provider,
+      pinned_model: m.pinned_model,
+    }));
+
     routerConfig.value.mode = mode;
     if (mode === "sticky") {
       for (const m of modelEntries.value) {
@@ -430,7 +437,31 @@ export const useConfigStore = defineStore("config", () => {
         }
       }
     }
-    return saveConfig();
+
+    try {
+      const ok = await saveConfig();
+      if (!ok) {
+        routerConfig.value.mode = previousMode;
+        for (const prev of previousPins) {
+          const m = modelEntries.value.find((entry) => entry.id === prev.id);
+          if (m) {
+            m.pinned_provider = prev.pinned_provider;
+            m.pinned_model = prev.pinned_model;
+          }
+        }
+      }
+      return ok;
+    } catch (err) {
+      routerConfig.value.mode = previousMode;
+      for (const prev of previousPins) {
+        const m = modelEntries.value.find((entry) => entry.id === prev.id);
+        if (m) {
+          m.pinned_provider = prev.pinned_provider;
+          m.pinned_model = prev.pinned_model;
+        }
+      }
+      throw err;
+    }
   }
 
   function moveRef(model: ModelEntry, from: number, to: number) {

@@ -137,4 +137,37 @@ class TestProviderGateCooldown:
         cfg = _cfg(rate_limit_cooldown=12.0)
         gate.configure([cfg])
         duration = gate.enter_cooldown("p1")
-        assert duration == 12.0
+        assert duration == pytest.approx(12.0, abs=0.05)
+
+    async def test_enter_cooldown_returns_longer_remaining(self):
+        gate = ProviderGate()
+        gate.enter_cooldown("p1", 30.0)
+        remaining = gate.enter_cooldown("p1", 5.0)
+        assert remaining > 25.0
+
+    async def test_configure_unlimited_wakes_waiter(self):
+        gate = ProviderGate()
+        cfg = _cfg(max_concurrent=1, max_queue=2, queue_wait_timeout=2.0)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        waiter_got = asyncio.Event()
+
+        async def holder():
+            async with gate.slot(cfg):
+                entered.set()
+                await release.wait()
+
+        async def waiter():
+            async with gate.slot(cfg):
+                waiter_got.set()
+
+        task = asyncio.create_task(holder())
+        await entered.wait()
+        wait_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        # 热重载取消并发限制，应唤醒排队请求
+        gate.configure([_cfg(max_concurrent=0, max_queue=0)])
+        await asyncio.wait_for(waiter_got.wait(), timeout=1.0)
+        release.set()
+        await task
+        await wait_task

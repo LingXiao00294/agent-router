@@ -422,6 +422,9 @@ class Router:
             provider_count=len(providers),
         )
 
+        # 一旦向客户端 yield 过字节，禁止再 failover，避免拼接多路 SSE
+        client_started = False
+
         for i, provider_cfg in enumerate(providers):
             attempt = i + 1
             p_start = time.time()
@@ -441,10 +444,12 @@ class Router:
                     error_buffer = b""
                     async for chunk in provider.send_stream(request_body):
                         error_buffer += chunk
-                        _check_stream_error(error_buffer)
                         if len(error_buffer) > 8192:
                             error_buffer = error_buffer[-4096:]
+                        # 先发给客户端再检测流内错误，避免已输出半截后仍 failover
+                        client_started = True
                         yield chunk
+                        _check_stream_error(error_buffer)
                     p_latency = (time.time() - p_start) * 1000
                     total_latency = (time.time() - start_time) * 1000
 
@@ -470,6 +475,7 @@ class Router:
                     return
 
             except (ProviderCooldownError, ProviderCapacityError) as e:
+                can_failover = allow_failover and not client_started
                 await self._record_gate_skip(
                     e,
                     provider_cfg,
@@ -479,10 +485,13 @@ class Router:
                     outcome,
                     providers,
                     i,
-                    allow_failover=allow_failover,
+                    allow_failover=can_failover,
                     virtual_model=virtual_model,
                 )
+                if client_started:
+                    raise
             except (RetryableError, NonRetryableError) as e:
+                can_failover = allow_failover and not client_started
                 try:
                     await self._handle_provider_error(
                         e,
@@ -493,7 +502,7 @@ class Router:
                         outcome,
                         providers,
                         i,
-                        allow_failover=allow_failover,
+                        allow_failover=can_failover,
                     )
                 except StickyRateLimited as srl:
                     raise NoProviderAvailableError(
@@ -502,6 +511,9 @@ class Router:
                         kind="rate_limit",
                         retry_after=srl.retry_after,
                     ) from e
+                if client_started:
+                    # 已向客户端发送数据后不再 failover；可重试错误也直接抛出
+                    raise
 
         raise self._exhausted(virtual_model, errors, start_time, len(providers))
 
@@ -542,11 +554,37 @@ class Router:
         mode = self.config.router.mode
 
         if mode == "sticky":
+            if not vm.pinned_provider or not vm.pinned_model:
+                raise AllProvidersFailedError(
+                    virtual_model,
+                    [
+                        {
+                            "provider": "(none)",
+                            "model": "(none)",
+                            "error": ("sticky 模式未配置 pinned_provider/pinned_model"),
+                            "retryable": False,
+                        }
+                    ],
+                )
             candidates = [
                 p
                 for p in vm.providers
                 if p.name == vm.pinned_provider and p.model == vm.pinned_model
             ]
+            if not candidates:
+                raise AllProvidersFailedError(
+                    virtual_model,
+                    [
+                        {
+                            "provider": vm.pinned_provider,
+                            "model": vm.pinned_model,
+                            "error": (
+                                "sticky 指定的 provider:model 不在该虚拟模型链中"
+                            ),
+                            "retryable": False,
+                        }
+                    ],
+                )
         else:
             candidates = list(vm.providers)
 

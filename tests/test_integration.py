@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import httpx
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
+from agent_router.app import create_app
 from agent_router.config import (
     AppConfig,
-    ServerConfig,
     ProviderConfig,
+    RouterConfig,
+    ServerConfig,
     VirtualModelConfig,
 )
 from agent_router.db import CallStore
-from agent_router.app import create_app
+from agent_router.routing import Router
 
 
 @pytest.fixture
@@ -96,6 +99,56 @@ class TestMessages:
         )
         # 预期 502 因为 api key 是假的, 或者 401 从上游透传
         assert resp.status_code in (401, 502)
+
+    @pytest.mark.asyncio
+    async def test_stream_rate_limit_returns_http_429(self, store):
+        """流式在首字节前限流时返回 HTTP 429 + Retry-After，而非 SSE 内嵌错误."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, text="rl", headers={"Retry-After": "7"})
+
+        transport = httpx.MockTransport(handler)
+        http_client = httpx.AsyncClient(transport=transport)
+        config = AppConfig(
+            server=ServerConfig(),
+            router=RouterConfig(mode="sticky"),
+            models={
+                "m": VirtualModelConfig(
+                    pinned_provider="p1",
+                    pinned_model="m1",
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="p1",
+                            model="m1",
+                            api_key="k",
+                            base_url="https://p1.test",
+                            priority=1,
+                        )
+                    ],
+                )
+            },
+        )
+        app = create_app(config, store)
+        # 注入带 mock transport 的 router
+        app.state.router_engine = Router(config, http_client)
+
+        asgi = ASGITransport(app=app)
+        async with AsyncClient(transport=asgi, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "m",
+                    "stream": True,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+        await http_client.aclose()
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") in {"7", "6"}  # ceil of remaining
+        assert int(resp.headers.get("retry-after", "0")) >= 6
+        assert resp.json()["error"]["type"] == "rate_limit_error"
 
 
 class TestRecordCall:
