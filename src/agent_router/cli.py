@@ -874,8 +874,8 @@ def _load_config(
 
 def _unresolved_runtime_providers(config: AppConfig) -> list[str]:
     unresolved: dict[str, str] = {}
-    for providers in config.models.values():
-        for provider in providers:
+    for vm in config.models.values():
+        for provider in vm.providers:
             if has_unresolved_env_var(provider.api_key):
                 unresolved[provider.name] = provider.api_key
     return [f"{name}({api_key})" for name, api_key in sorted(unresolved.items())]
@@ -984,9 +984,15 @@ def _print_model_routes(config: AppConfig) -> None:
         print("虚拟模型: (未配置)")
         return
     print("路由链:")
-    for virtual_model, providers in config.models.items():
-        chain = " -> ".join(f"{p.name}:{p.model}(p{p.priority})" for p in providers)
-        print(f"  {virtual_model}: {chain}")
+    print(f"路由模式: {config.router.mode}")
+    for virtual_model, vm in config.models.items():
+        chain = " -> ".join(f"{p.name}:{p.model}(p{p.priority})" for p in vm.providers)
+        pin = (
+            f" [pin={vm.pinned_provider}:{vm.pinned_model}]"
+            if vm.pinned_provider and vm.pinned_model
+            else ""
+        )
+        print(f"  {virtual_model}{pin}: {chain}")
 
 
 def _provider_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1019,7 +1025,13 @@ def _provider_ref_counts(raw: dict[str, Any]) -> dict[str, int]:
     models = raw.get("models", {})
     if not isinstance(models, dict):
         return counts
-    for refs in models.values():
+    for entry in models.values():
+        if isinstance(entry, list):
+            refs = entry
+        elif isinstance(entry, dict):
+            refs = entry.get("providers", [])
+        else:
+            continue
         if not isinstance(refs, list):
             continue
         for ref in refs:
@@ -1034,7 +1046,13 @@ def _model_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(models, dict):
         return []
     rows: list[dict[str, Any]] = []
-    for virtual_model, refs in sorted(models.items()):
+    for virtual_model, entry in sorted(models.items()):
+        if isinstance(entry, list):
+            refs = entry
+        elif isinstance(entry, dict):
+            refs = entry.get("providers", [])
+        else:
+            continue
         if not isinstance(refs, list):
             continue
         model_refs = [

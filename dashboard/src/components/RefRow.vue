@@ -2,12 +2,27 @@
   <div
     class="ref-row"
     draggable="true"
-    :class="{ dragging: isDragging, 'drag-over': isDragOver }"
+    :class="{
+      dragging: isDragging,
+      'drag-over': isDragOver,
+      selected: selected && pinEnabled,
+      'pin-disabled': !pinEnabled,
+    }"
     @dragstart="onDragStart"
     @dragover.prevent="onDragOver"
     @drop="onDrop"
     @dragend="onDragEnd"
   >
+    <button
+      type="button"
+      class="pin-radio"
+      :class="{ on: selected, disabled: !pinEnabled }"
+      :disabled="!pinEnabled"
+      :title="pinTitle"
+      @click="onSelect"
+    >
+      <span class="pin-dot" />
+    </button>
     <span class="drag-handle" title="拖动排序">⋮⋮</span>
     <span class="priority-badge">{{ refItem.priority }}</span>
     <UiSelect
@@ -40,19 +55,26 @@ import UiInput from "./ui/UiInput.vue";
 import UiSelect from "./ui/UiSelect.vue";
 import UiButton from "./ui/UiButton.vue";
 
-const props = defineProps<{
-  refItem: ModelRef;
-  providerNames: string[];
-  providerError?: string;
-  modelError?: string;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    refItem: ModelRef;
+    providerNames: string[];
+    providerError?: string;
+    modelError?: string;
+    canMoveUp: boolean;
+    canMoveDown: boolean;
+    /** 总开关为指定模型时才可点选 */
+    pinEnabled?: boolean;
+    selected?: boolean;
+  }>(),
+  { pinEnabled: false, selected: false }
+);
 
 const emit = defineEmits<{
   "move-up": [];
   "move-down": [];
   remove: [];
+  select: [];
   "touch-provider": [];
   "touch-model": [];
   dragstart: [event: DragEvent];
@@ -63,8 +85,18 @@ const providerOptions = computed(() =>
   props.providerNames.map((name) => ({ label: name, value: name }))
 );
 
+const pinTitle = computed(() => {
+  if (!props.pinEnabled) return "故障转移模式下指定开关无效";
+  return props.selected ? "当前指定模型" : "设为指定模型";
+});
+
 const isDragging = ref(false);
 const isDragOver = ref(false);
+
+function onSelect() {
+  if (!props.pinEnabled) return;
+  emit("select");
+}
 
 function onDragStart(e: DragEvent) {
   isDragging.value = true;
@@ -104,12 +136,53 @@ function onDragEnd() {
 .ref-row:hover {
   border-color: var(--color-border);
 }
+.ref-row.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
 .ref-row.dragging {
   opacity: 0.4;
 }
 .ref-row.drag-over {
   border-color: var(--color-primary);
   background: var(--color-primary-muted);
+}
+
+.pin-radio {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.pin-radio.on {
+  border-color: var(--color-primary);
+}
+.pin-radio.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pin-radio.disabled.on {
+  border-color: var(--color-border);
+}
+.pin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+.pin-radio.on .pin-dot {
+  background: var(--color-primary);
+}
+.pin-radio.disabled.on .pin-dot {
+  background: var(--color-text-muted);
 }
 
 .drag-handle {

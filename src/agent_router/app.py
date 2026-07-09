@@ -17,7 +17,12 @@ from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig, load_config
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
-from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
+from agent_router.routing import (
+    AllProvidersFailedError,
+    NoProviderAvailableError,
+    Router,
+    UnknownModelError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -197,6 +202,43 @@ def create_app(
                 status_code=400,
             )
 
+        except NoProviderAvailableError as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            failover = [
+                {
+                    "provider": err["provider"],
+                    "model": err["model"],
+                    "error": err["error"],
+                }
+                for err in e.errors
+            ]
+            status_code = 503 if e.kind == "capacity" else 429
+            error_type = (
+                "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
+            )
+            await store.record(
+                virtual_model=virtual_model,
+                status="error",
+                error_type=error_type,
+                error_message=str(e),
+                latency_ms=latency_ms,
+                request_body=body,
+                failover_details=failover,
+            )
+            headers = {}
+            if e.retry_after is not None:
+                headers["Retry-After"] = str(max(1, int(e.retry_after)))
+            return JSONResponse(
+                {
+                    "error": {
+                        "type": error_type,
+                        "message": str(e),
+                    }
+                },
+                status_code=status_code,
+                headers=headers,
+            )
+
         except AllProvidersFailedError as e:
             latency_ms = int((time.time() - start_time) * 1000)
             failover = [
@@ -355,7 +397,7 @@ async def _stream_wrapper(
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         failover = None
-        if isinstance(e, AllProvidersFailedError):
+        if isinstance(e, (AllProvidersFailedError, NoProviderAvailableError)):
             failover = [
                 {
                     "provider": err["provider"],

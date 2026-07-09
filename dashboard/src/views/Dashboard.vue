@@ -2,6 +2,26 @@
   <div class="dashboard">
     <PageHeader title="仪表盘" subtitle="实时监控路由调用与模型状态">
       <template #actions>
+        <div class="mode-toggle" title="全局路由模式">
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: configStore.routerConfig.mode === 'failover' }"
+            :disabled="modeSaving"
+            @click="switchMode('failover')"
+          >
+            故障转移
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: configStore.routerConfig.mode === 'sticky' }"
+            :disabled="modeSaving"
+            @click="switchMode('sticky')"
+          >
+            指定模型
+          </button>
+        </div>
         <AutoRefreshControl />
         <UiButton variant="primary" :loading="metrics.refreshing || calls.refreshing" @click="() => refresh()">
           <template #icon>↻</template>
@@ -60,6 +80,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useMetricsStore } from "../stores/metrics";
 import { useCallsStore } from "../stores/calls";
 import { useAutoRefreshStore } from "../stores/autoRefresh";
+import { useConfigStore } from "../stores/config";
 import { useToast } from "../composables/useToast";
 import PageHeader from "../components/PageHeader.vue";
 import StatsCards from "../components/StatsCards.vue";
@@ -75,9 +96,11 @@ import UiErrorBanner from "../components/ui/UiErrorBanner.vue";
 const metrics = useMetricsStore();
 const calls = useCallsStore();
 const autoRefresh = useAutoRefreshStore();
+const configStore = useConfigStore();
 const toast = useToast();
 const route = useRoute();
 const router = useRouter();
+const modeSaving = ref(false);
 
 const trendDays = ref(30);
 const modelFilterRef = ref<InstanceType<typeof ModelFilter> | null>(null);
@@ -125,6 +148,23 @@ async function refresh(silent = false) {
   }
 }
 
+async function switchMode(mode: "failover" | "sticky") {
+  if (configStore.routerConfig.mode === mode || modeSaving.value) return;
+  modeSaving.value = true;
+  try {
+    const ok = await configStore.setRouterMode(mode);
+    if (ok) {
+      toast.success(mode === "sticky" ? "已切换为指定模型模式" : "已切换为故障转移模式");
+    } else {
+      toast.error(configStore.error || "切换路由模式失败，请先在虚拟模型中选择指定项");
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "切换路由模式失败");
+  } finally {
+    modeSaving.value = false;
+  }
+}
+
 function showDetail(id: string) {
   calls.loadDetail(id).catch(() => {
     toast.error("加载调用详情失败");
@@ -167,6 +207,9 @@ onMounted(() => {
   }
 
   refresh();
+  configStore.loadConfig().catch(() => {
+    /* 模式开关依赖配置；失败时保持默认 failover */
+  });
   autoRefresh.start();
   unregisterRefresh = autoRefresh.register(() => refresh(true));
   document.addEventListener("keydown", onKeydown);
@@ -192,5 +235,29 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-4);
+}
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.mode-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.mode-btn.active {
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+  font-weight: var(--font-medium);
 }
 </style>

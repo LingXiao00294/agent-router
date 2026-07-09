@@ -8,7 +8,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agent_router.app import create_app
-from agent_router.config import AppConfig, ProviderConfig, load_config
+from agent_router.config import (
+    AppConfig,
+    ProviderConfig,
+    VirtualModelConfig,
+    load_config,
+)
 from agent_router.db import CallStore
 from agent_router.routing import Router
 
@@ -43,9 +48,9 @@ priority = 1
             assert config.server.host == "0.0.0.0"
             assert config.server.port == 9999
             assert "test" in config.models
-            assert len(config.models["test"]) == 1
-            assert config.models["test"][0].model == "claude-test"
-            assert config.models["test"][0].api_key == "sk-test"
+            assert len(config.models["test"].providers) == 1
+            assert config.models["test"].providers[0].model == "claude-test"
+            assert config.models["test"].providers[0].api_key == "sk-test"
         finally:
             path.unlink()
 
@@ -78,7 +83,7 @@ priority = 2
         path = _write_toml(toml)
         try:
             config = load_config(path)
-            providers = config.models["test"]
+            providers = config.models["test"].providers
             assert [p.priority for p in providers] == [1, 2, 3]
             assert [p.model for p in providers] == ["first", "second", "third"]
         finally:
@@ -104,7 +109,7 @@ priority = 1
         path = _write_toml(toml)
         try:
             config = load_config(path)
-            assert config.models["test"][0].api_key == "env-key-123"
+            assert config.models["test"].providers[0].api_key == "env-key-123"
         finally:
             path.unlink()
             del os.environ["TEST_API_KEY"]
@@ -206,7 +211,10 @@ priority = 1
         path = _write_toml(toml)
         try:
             config = load_config(path, allow_unresolved_api_keys=True)
-            assert config.models["test"][0].api_key == "${NONEXISTENT_ENV_VAR_12345}"
+            assert (
+                config.models["test"].providers[0].api_key
+                == "${NONEXISTENT_ENV_VAR_12345}"
+            )
         finally:
             path.unlink()
 
@@ -301,7 +309,7 @@ priority = 2
         path = _write_toml(toml)
         try:
             config = load_config(path)
-            providers = config.models["haiku-router"]
+            providers = config.models["haiku-router"].providers
             assert len(providers) == 2
             assert providers[0].model == "claude-haiku-4-5"
             assert providers[0].api_key == "sk-ant-xxx"
@@ -344,21 +352,23 @@ class TestReloadConfig:
         new_config = AppConfig(
             server=sample_config.server,
             models={
-                "new-model": [
-                    ProviderConfig(
-                        type="anthropic",
-                        name="p1",
-                        model="m-new",
-                        api_key="k",
-                        base_url="https://api.com",
-                        priority=1,
-                    ),
-                ],
+                "new-model": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="p1",
+                            model="m-new",
+                            api_key="k",
+                            base_url="https://api.com",
+                            priority=1,
+                        ),
+                    ]
+                ),
             },
         )
         await router.reload_config(new_config)
         assert router.model_names == ["new-model"]
-        assert router.config.models["new-model"][0].model == "m-new"
+        assert router.config.models["new-model"].providers[0].model == "m-new"
 
     @pytest.mark.asyncio
     async def test_reload_preserves_circuit_breaker(self, sample_config, http_client):
@@ -371,16 +381,18 @@ class TestReloadConfig:
         new_config = AppConfig(
             server=sample_config.server,
             models={
-                "m": [
-                    ProviderConfig(
-                        type="anthropic",
-                        name="anthropic",
-                        model="x",
-                        api_key="k",
-                        base_url="https://api.com",
-                        priority=1,
-                    )
-                ]
+                "m": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="anthropic",
+                            model="x",
+                            api_key="k",
+                            base_url="https://api.com",
+                            priority=1,
+                        )
+                    ]
+                )
             },
         )
         await router.reload_config(new_config)
@@ -529,7 +541,7 @@ priority = 2
                 # 初始: p1 优先
                 resp = await ac.get("/api/config/models")
                 models = resp.json()
-                assert models["mymodel"][0]["provider"] == "p1"
+                assert models["mymodel"]["providers"][0]["provider"] == "p1"
 
                 # 交换优先级
                 new_body = {
@@ -547,10 +559,12 @@ priority = 2
                         },
                     },
                     "models": {
-                        "mymodel": [
-                            {"provider": "p2", "model": "model-b", "priority": 1},
-                            {"provider": "p1", "model": "model-a", "priority": 2},
-                        ],
+                        "mymodel": {
+                            "providers": [
+                                {"provider": "p2", "model": "model-b", "priority": 1},
+                                {"provider": "p1", "model": "model-a", "priority": 2},
+                            ],
+                        },
                     },
                 }
                 resp = await ac.put("/api/config", json=new_body)
@@ -559,7 +573,7 @@ priority = 2
                 # 热重载后优先级已变化
                 resp = await ac.get("/api/config/models")
                 models = resp.json()
-                assert models["mymodel"][0]["provider"] == "p2"
+                assert models["mymodel"]["providers"][0]["provider"] == "p2"
         finally:
             path.unlink(missing_ok=True)
 

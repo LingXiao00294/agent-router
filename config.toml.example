@@ -9,12 +9,18 @@ log_backup_count = 5
 [router]
 failure_threshold = 5
 recovery_timeout = 600
+mode = "failover"   # 或 "sticky"（全局指定模型；各虚拟模型需设置 pinned_*）
 
 [providers.zai]
 type = "anthropic"
 api_key = "${ZAI_API_KEY}"
 base_url = "https://api.z.ai/api/anthropic"
 timeout_seconds = 120
+# 本地限流（0 = 不限制，保持旧行为）
+# max_concurrent = 0
+# max_queue = 0
+# queue_wait_timeout = 30
+# rate_limit_cooldown = 30
 
 [providers.deepseek]
 type = "anthropic"
@@ -28,38 +34,46 @@ api_key = "${MIMO_API_KEY}"
 base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
 timeout_seconds = 120
 
-[[models.opus-router]]
+[models.opus-router]
+# 全局 mode=sticky 时生效：
+# pinned_provider = "mimo token plan"
+# pinned_model = "mimo-v2.5-pro"
+
+[[models.opus-router.providers]]
 provider = "mimo token plan"
 model = "mimo-v2.5-pro"
 priority = 1
 
-[[models.opus-router]]
+[[models.opus-router.providers]]
 provider = "deepseek"
 model = "deepseek-v4-pro"
 priority = 2
 
-[[models.opus-router]]
+[[models.opus-router.providers]]
 provider = "zai"
 model = "glm-5.2"
 priority = 3
 
-[[models.sonnet-router]]
+[models.sonnet-router]
+
+[[models.sonnet-router.providers]]
 provider = "deepseek"
 model = "deepseek-v4-flash"
 priority = 1
 
-[[models.sonnet-router]]
+[[models.sonnet-router.providers]]
 provider = "mimo token plan"
 model = "mimo-v2.5"
 priority = 2
 
-[[models.haiku-router]]
+[models.haiku-router]
+
+[[models.haiku-router.providers]]
 provider = "deepseek"
 model = "deepseek-v4-flash"
 priority = 1
 
-[[models.haiku-router]]
+[[models.haiku-router.providers]]
 provider = "mimo token plan"
 model = "mimo-v2.5"
 priority = 2
-

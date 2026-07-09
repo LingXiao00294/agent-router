@@ -113,11 +113,32 @@ def _write_toml(config_path: str, data: dict) -> None:
             lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
 
-    # [[models.*]]
+    # [models.*] + [[models.*.providers]]
     models = data.get("models", {})
-    for vname, refs in models.items():
+    for vname, entry in models.items():
+        key = _toml_key(vname)
+        # 新格式: {pinned_*, providers: [...]}；旧格式 list 仍可写入
+        if isinstance(entry, list):
+            pinned_provider = None
+            pinned_model = None
+            refs = entry
+        elif isinstance(entry, dict) and "providers" in entry:
+            pinned_provider = entry.get("pinned_provider")
+            pinned_model = entry.get("pinned_model")
+            refs = entry.get("providers") or []
+        else:
+            # 意外结构：跳过
+            continue
+
+        lines.append(f"[models.{key}]")
+        if pinned_provider:
+            lines.append(f"pinned_provider = {_toml_value(pinned_provider)}")
+        if pinned_model:
+            lines.append(f"pinned_model = {_toml_value(pinned_model)}")
+        lines.append("")
+
         for ref in refs:
-            lines.append(f"[[models.{_toml_key(vname)}]]")
+            lines.append(f"[[models.{key}.providers]]")
             for k, v in ref.items():
                 if v is None:
                     continue
@@ -173,19 +194,33 @@ def create_config_router(
 
     @router.get("/api/config/models")
     async def list_models():
-        """列出所有虚拟模型及其 provider 链."""
+        """列出所有虚拟模型及其 provider 链（含 pinned）."""
         raw = _read_config_raw(config_path)
         models = raw.get("models", {})
-        result: dict[str, list[dict]] = {}
-        for vname, refs in models.items():
-            result[vname] = [
-                {
-                    "provider": r["provider"],
-                    "model": r["model"],
-                    "priority": r["priority"],
-                }
-                for r in sorted(refs, key=lambda r: r.get("priority", 99))
-            ]
+        result: dict[str, dict] = {}
+        for vname, entry in models.items():
+            if isinstance(entry, list):
+                refs = entry
+                pinned_provider = None
+                pinned_model = None
+            elif isinstance(entry, dict):
+                refs = entry.get("providers", [])
+                pinned_provider = entry.get("pinned_provider")
+                pinned_model = entry.get("pinned_model")
+            else:
+                continue
+            result[vname] = {
+                "pinned_provider": pinned_provider,
+                "pinned_model": pinned_model,
+                "providers": [
+                    {
+                        "provider": r["provider"],
+                        "model": r["model"],
+                        "priority": r["priority"],
+                    }
+                    for r in sorted(refs, key=lambda r: r.get("priority", 99))
+                ],
+            }
         return result
 
     @router.put("/api/config")

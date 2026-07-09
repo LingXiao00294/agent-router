@@ -1,0 +1,194 @@
+"""Per-provider local concurrency limits, bounded queueing, and short cooldowns."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+
+import structlog
+
+from agent_router.config import ProviderConfig, VirtualModelConfig
+
+logger = structlog.get_logger(__name__)
+
+
+class ProviderCapacityError(Exception):
+    """本地并发/队列已满或等待超时."""
+
+    def __init__(
+        self, provider: str, message: str, *, retry_after: float | None = None
+    ) -> None:
+        self.provider = provider
+        self.retry_after = retry_after
+        super().__init__(message)
+
+
+class ProviderCooldownError(Exception):
+    """Provider 处于短冷却（上游限流/过载）."""
+
+    def __init__(self, provider: str, retry_after: float) -> None:
+        self.provider = provider
+        self.retry_after = retry_after
+        super().__init__(
+            f"provider '{provider}' 处于限流冷却，约 {retry_after:.1f}s 后可重试"
+        )
+
+
+@dataclass
+class _GateState:
+    max_concurrent: int = 0
+    max_queue: int = 0
+    queue_wait_timeout: float = 30.0
+    rate_limit_cooldown: float = 30.0
+    in_flight: int = 0
+    waiting: int = 0
+    cooldown_until: float = 0.0
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+
+
+class ProviderGate:
+    """按 provider name 管理本地并发、排队与短冷却."""
+
+    def __init__(self) -> None:
+        self._states: dict[str, _GateState] = {}
+
+    def _get(self, name: str) -> _GateState:
+        if name not in self._states:
+            self._states[name] = _GateState()
+        return self._states[name]
+
+    def _apply_limits(self, state: _GateState, provider: ProviderConfig) -> None:
+        state.max_concurrent = provider.max_concurrent
+        state.max_queue = provider.max_queue
+        state.queue_wait_timeout = provider.queue_wait_timeout
+        state.rate_limit_cooldown = provider.rate_limit_cooldown
+
+    def configure(self, providers: list[ProviderConfig]) -> None:
+        """根据配置更新各 provider 的限流参数（热重载友好）."""
+        seen: set[str] = set()
+        for p in providers:
+            seen.add(p.name)
+            self._apply_limits(self._get(p.name), p)
+
+        for name, state in self._states.items():
+            if name not in seen:
+                state.max_concurrent = 0
+                state.max_queue = 0
+
+    def configure_from_models(self, models: dict[str, VirtualModelConfig]) -> None:
+        """从 AppConfig.models 收集全部 ProviderConfig 并配置."""
+        by_name: dict[str, ProviderConfig] = {}
+        for vm in models.values():
+            for p in vm.providers:
+                by_name.setdefault(p.name, p)
+        self.configure(list(by_name.values()))
+
+    def is_in_cooldown(self, name: str) -> bool:
+        return self.cooldown_remaining(name) > 0
+
+    def cooldown_remaining(self, name: str) -> float:
+        state = self._get(name)
+        return max(0.0, state.cooldown_until - time.monotonic())
+
+    def enter_cooldown(self, name: str, seconds: float | None = None) -> float:
+        """进入短冷却，返回实际冷却秒数."""
+        state = self._get(name)
+        duration = (
+            seconds
+            if seconds is not None and seconds > 0
+            else state.rate_limit_cooldown
+        )
+        until = time.monotonic() + duration
+        if until > state.cooldown_until:
+            state.cooldown_until = until
+        logger.info(
+            "provider.cooldown",
+            provider=name,
+            cooldown_seconds=round(duration, 2),
+        )
+        return duration
+
+    def clear_cooldown(self, name: str) -> None:
+        self._get(name).cooldown_until = 0.0
+
+    def snapshot(self) -> dict[str, dict]:
+        """供监控 API 使用的状态快照."""
+        now = time.monotonic()
+        result: dict[str, dict] = {}
+        for name, state in self._states.items():
+            remaining = max(0.0, state.cooldown_until - now)
+            result[name] = {
+                "max_concurrent": state.max_concurrent,
+                "max_queue": state.max_queue,
+                "in_flight": state.in_flight,
+                "waiting": state.waiting,
+                "in_cooldown": remaining > 0,
+                "cooldown_remaining": round(remaining, 2),
+            }
+        return result
+
+    @asynccontextmanager
+    async def slot(self, provider: ProviderConfig) -> AsyncIterator[None]:
+        """占用一个并发槽位；必要时排队等待.
+
+        若处于冷却、队列已满或等待超时，抛出对应异常。
+        """
+        name = provider.name
+        state = self._get(name)
+
+        async with state.condition:
+            self._apply_limits(state, provider)
+
+            remaining = max(0.0, state.cooldown_until - time.monotonic())
+            if remaining > 0:
+                raise ProviderCooldownError(name, remaining)
+
+            # 无并发限制
+            if state.max_concurrent <= 0:
+                state.in_flight += 1
+            else:
+                # 有空位则直接占用
+                if state.in_flight < state.max_concurrent:
+                    state.in_flight += 1
+                else:
+                    if state.max_queue <= 0:
+                        raise ProviderCapacityError(
+                            name,
+                            f"provider '{name}' 并发已满且未启用排队",
+                            retry_after=state.queue_wait_timeout,
+                        )
+                    if state.waiting >= state.max_queue:
+                        raise ProviderCapacityError(
+                            name,
+                            f"provider '{name}' 等待队列已满 "
+                            f"(max_queue={state.max_queue})",
+                            retry_after=state.queue_wait_timeout,
+                        )
+                    state.waiting += 1
+                    wait_timeout = state.queue_wait_timeout
+                    try:
+                        await asyncio.wait_for(
+                            state.condition.wait_for(
+                                lambda: state.in_flight < state.max_concurrent
+                            ),
+                            timeout=wait_timeout,
+                        )
+                    except TimeoutError:
+                        state.waiting = max(0, state.waiting - 1)
+                        raise ProviderCapacityError(
+                            name,
+                            f"provider '{name}' 排队等待超时 ({wait_timeout}s)",
+                            retry_after=wait_timeout,
+                        ) from None
+                    state.waiting = max(0, state.waiting - 1)
+                    state.in_flight += 1
+
+        try:
+            yield
+        finally:
+            async with state.condition:
+                state.in_flight = max(0, state.in_flight - 1)
+                state.condition.notify()

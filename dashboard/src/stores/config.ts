@@ -10,6 +10,7 @@ import {
   type RouterConfig,
   type ProviderConfig,
   type ModelRef,
+  type VirtualModelConfig,
 } from "../api";
 
 export interface ProviderEntry {
@@ -22,6 +23,10 @@ export interface ProviderEntry {
   has_key: boolean;
   failure_threshold: number | null;
   recovery_timeout: number | null;
+  max_concurrent: number;
+  max_queue: number;
+  queue_wait_timeout: number;
+  rate_limit_cooldown: number;
 }
 
 export interface ModelRefEntry extends ModelRef {
@@ -31,6 +36,8 @@ export interface ModelRefEntry extends ModelRef {
 export interface ModelEntry {
   id: number;
   name: string;
+  pinned_provider: string | null;
+  pinned_model: string | null;
   refs: ModelRefEntry[];
 }
 
@@ -51,6 +58,7 @@ const DEFAULT_SERVER: ServerConfig = {
 const DEFAULT_ROUTER: RouterConfig = {
   failure_threshold: 5,
   recovery_timeout: 600,
+  mode: "failover",
 };
 
 export const useConfigStore = defineStore("config", () => {
@@ -127,6 +135,7 @@ export const useConfigStore = defineStore("config", () => {
       routerConfig.value = {
         failure_threshold: cfg.router?.failure_threshold ?? DEFAULT_ROUTER.failure_threshold,
         recovery_timeout: cfg.router?.recovery_timeout ?? DEFAULT_ROUTER.recovery_timeout,
+        mode: cfg.router?.mode === "sticky" ? "sticky" : "failover",
       };
 
       providerEntries.value = Object.entries(cfg.providers || {}).map(([name, p]) => ({
@@ -139,18 +148,27 @@ export const useConfigStore = defineStore("config", () => {
         has_key: !!p.has_key,
         failure_threshold: p.failure_threshold ?? null,
         recovery_timeout: p.recovery_timeout ?? null,
+        max_concurrent: p.max_concurrent ?? 0,
+        max_queue: p.max_queue ?? 0,
+        queue_wait_timeout: p.queue_wait_timeout ?? 30,
+        rate_limit_cooldown: p.rate_limit_cooldown ?? 30,
       }));
 
-      modelEntries.value = Object.entries(models || {}).map(([name, refs]) => ({
-        id: nextId(),
-        name,
-        refs: (refs || []).map((r) => ({
+      modelEntries.value = Object.entries(models || {}).map(([name, entry]) => {
+        const vm = normalizeVirtualModel(entry);
+        return {
           id: nextId(),
-          provider: r.provider || "",
-          model: r.model || "",
-          priority: r.priority || 99,
-        })),
-      }));
+          name,
+          pinned_provider: vm.pinned_provider ?? null,
+          pinned_model: vm.pinned_model ?? null,
+          refs: vm.providers.map((r) => ({
+            id: nextId(),
+            provider: r.provider || "",
+            model: r.model || "",
+            priority: r.priority || 99,
+          })),
+        };
+      });
 
       await loadCircuitStates();
       snapshot();
@@ -180,6 +198,22 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
+  function normalizeVirtualModel(
+    entry: VirtualModelConfig | ModelRef[] | undefined
+  ): VirtualModelConfig {
+    if (Array.isArray(entry)) {
+      return { providers: entry };
+    }
+    if (entry && typeof entry === "object" && Array.isArray(entry.providers)) {
+      return {
+        pinned_provider: entry.pinned_provider ?? null,
+        pinned_model: entry.pinned_model ?? null,
+        providers: entry.providers,
+      };
+    }
+    return { providers: [] };
+  }
+
   function buildConfigBody() {
     const providers: Record<string, ProviderConfig> = {};
     for (const p of providerEntries.value) {
@@ -191,19 +225,28 @@ export const useConfigStore = defineStore("config", () => {
         timeout_seconds: p.timeout_seconds,
         failure_threshold: p.failure_threshold ?? null,
         recovery_timeout: p.recovery_timeout ?? null,
+        max_concurrent: p.max_concurrent || 0,
+        max_queue: p.max_queue || 0,
+        queue_wait_timeout: p.queue_wait_timeout || 30,
+        rate_limit_cooldown: p.rate_limit_cooldown || 30,
       };
     }
 
-    const models: Record<string, ModelRef[]> = {};
+    const models: Record<string, VirtualModelConfig> = {};
     for (const m of modelEntries.value) {
       if (!m.name.trim() || m.refs.length === 0) continue;
-      models[m.name] = m.refs
+      const providersList = m.refs
         .filter((r) => r.provider && r.model)
         .map((r, i) => ({
           provider: r.provider,
           model: r.model,
           priority: i + 1,
         }));
+      models[m.name] = {
+        pinned_provider: m.pinned_provider,
+        pinned_model: m.pinned_model,
+        providers: providersList,
+      };
     }
 
     return {
@@ -249,6 +292,12 @@ export const useConfigStore = defineStore("config", () => {
       if (!Number.isInteger(p.timeout_seconds) || p.timeout_seconds <= 0) {
         errors[`providers[${i}].timeout_seconds`] = "超时需为大于 0 的整数";
       }
+      if (!Number.isInteger(p.max_concurrent) || p.max_concurrent < 0) {
+        errors[`providers[${i}].max_concurrent`] = "需为大于等于 0 的整数";
+      }
+      if (!Number.isInteger(p.max_queue) || p.max_queue < 0) {
+        errors[`providers[${i}].max_queue`] = "需为大于等于 0 的整数";
+      }
     });
 
     const modelNames = new Set<string>();
@@ -264,6 +313,14 @@ export const useConfigStore = defineStore("config", () => {
         if (!r.provider) errors[`models[${mi}].refs[${ri}].provider`] = "请选择 provider";
         if (!r.model.trim()) errors[`models[${mi}].refs[${ri}].model`] = "真实模型名不能为空";
       });
+      if (routerConfig.value.mode === "sticky") {
+        const pinnedOk = m.refs.some(
+          (r) => r.provider === m.pinned_provider && r.model === m.pinned_model
+        );
+        if (!m.pinned_provider || !m.pinned_model || !pinnedOk) {
+          errors[`models[${mi}].pinned`] = "指定模型模式下请选择链中的一项";
+        }
+      }
     });
 
     validationErrors.value = errors;
@@ -295,6 +352,10 @@ export const useConfigStore = defineStore("config", () => {
       has_key: false,
       failure_threshold: null,
       recovery_timeout: null,
+      max_concurrent: 0,
+      max_queue: 0,
+      queue_wait_timeout: 30,
+      rate_limit_cooldown: 30,
     });
   }
 
@@ -306,12 +367,22 @@ export const useConfigStore = defineStore("config", () => {
     if (name) {
       for (const m of modelEntries.value) {
         m.refs = m.refs.filter((r) => r.provider !== name);
+        if (m.pinned_provider === name) {
+          m.pinned_provider = null;
+          m.pinned_model = null;
+        }
       }
     }
   }
 
   function addModel() {
-    modelEntries.value.push({ id: nextId(), name: "", refs: [] });
+    modelEntries.value.push({
+      id: nextId(),
+      name: "",
+      pinned_provider: null,
+      pinned_model: null,
+      refs: [],
+    });
   }
 
   function removeModel(idx: number) {
@@ -328,8 +399,38 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   function removeRef(model: ModelEntry, idx: number) {
+    const removed = model.refs[idx];
     model.refs.splice(idx, 1);
     recomputePriorities(model);
+    if (
+      removed &&
+      model.pinned_provider === removed.provider &&
+      model.pinned_model === removed.model
+    ) {
+      model.pinned_provider = null;
+      model.pinned_model = null;
+    }
+  }
+
+  function pinRef(model: ModelEntry, idx: number) {
+    const ref = model.refs[idx];
+    if (!ref) return;
+    model.pinned_provider = ref.provider;
+    model.pinned_model = ref.model;
+  }
+
+  async function setRouterMode(mode: "failover" | "sticky"): Promise<boolean> {
+    routerConfig.value.mode = mode;
+    if (mode === "sticky") {
+      for (const m of modelEntries.value) {
+        if (!m.pinned_provider && m.refs.length > 0) {
+          const first = m.refs[0];
+          m.pinned_provider = first.provider || null;
+          m.pinned_model = first.model || null;
+        }
+      }
+    }
+    return saveConfig();
   }
 
   function moveRef(model: ModelEntry, from: number, to: number) {
@@ -374,6 +475,8 @@ export const useConfigStore = defineStore("config", () => {
     removeModel,
     addRef,
     removeRef,
+    pinRef,
+    setRouterMode,
     moveRef,
     recomputePriorities,
   };

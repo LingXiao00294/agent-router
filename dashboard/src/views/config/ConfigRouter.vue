@@ -1,6 +1,12 @@
 <template>
   <ConfigSection title="Router">
     <div class="form-grid">
+      <UiSelect
+        :model-value="configStore.routerConfig.mode"
+        label="路由模式"
+        :options="modeOptions"
+        @update:model-value="onModeChange"
+      />
       <UiInput
         v-model.number="configStore.routerConfig.failure_threshold"
         label="熔断阈值（次连续失败）"
@@ -23,11 +29,22 @@
 import { useConfigStore } from "../../stores/config";
 import ConfigSection from "../../components/ConfigSection.vue";
 import UiInput from "../../components/ui/UiInput.vue";
+import UiSelect from "../../components/ui/UiSelect.vue";
 
 const configStore = useConfigStore();
 
+const modeOptions = [
+  { label: "故障转移", value: "failover" },
+  { label: "指定模型", value: "sticky" },
+];
+
 function touch(_path: string) {
   configStore.validate();
+}
+
+function onModeChange(value: string) {
+  configStore.routerConfig.mode = value === "sticky" ? "sticky" : "failover";
+  touch("router.mode");
 }
 </script>
 

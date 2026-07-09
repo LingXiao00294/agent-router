@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from agent_router.config import AppConfig, ServerConfig, ProviderConfig
+from agent_router.config import (
+    AppConfig,
+    ServerConfig,
+    ProviderConfig,
+    VirtualModelConfig,
+)
 from agent_router.db import CallStore
 from agent_router.app import create_app
 
@@ -13,15 +18,17 @@ def app_config():
     return AppConfig(
         server=ServerConfig(host="127.0.0.1", port=9456),
         models={
-            "test-router": [
-                ProviderConfig(
-                    type="anthropic",
-                    model="claude-haiku-4-5-20251001",
-                    api_key="sk-ant-test",
-                    base_url="https://api.anthropic.com",
-                    priority=1,
-                ),
-            ],
+            "test-router": VirtualModelConfig(
+                providers=[
+                    ProviderConfig(
+                        type="anthropic",
+                        model="claude-haiku-4-5-20251001",
+                        api_key="sk-ant-test",
+                        base_url="https://api.anthropic.com",
+                        priority=1,
+                    ),
+                ]
+            ),
         },
     )
 
