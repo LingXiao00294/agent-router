@@ -5,6 +5,7 @@ import math
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import httpx
@@ -146,7 +147,9 @@ def create_app(
                 outcome: dict = {}
                 # 预取首个 chunk：若在向客户端发送前就失败（冷却/容量/全失败），
                 # 返回真正的 HTTP 429/503/502 + Retry-After，而不是 SSE 内嵌错误。
-                stream_agen = engine.route_stream(body, outcome)
+                stream_agen: AsyncGenerator[bytes, None] = engine.route_stream(
+                    body, outcome
+                )
                 try:
                     first_chunk = await anext(stream_agen)
                 except StopAsyncIteration:
@@ -165,11 +168,16 @@ def create_app(
                     await stream_agen.aclose()
                     raise
 
-                async def _prepended():
-                    if first_chunk is not None:
-                        yield first_chunk
-                    async for chunk in stream_agen:
-                        yield chunk
+                async def _prepended() -> AsyncGenerator[bytes, None]:
+                    # 客户端中途断开时必须 aclose 预取的 generator，
+                    # 否则 ProviderGate.slot / 上游响应会一直占用到 GC。
+                    try:
+                        if first_chunk is not None:
+                            yield first_chunk
+                        async for chunk in stream_agen:
+                            yield chunk
+                    finally:
+                        await stream_agen.aclose()
 
                 return StreamingResponse(
                     _stream_wrapper(
@@ -332,7 +340,7 @@ async def _no_provider_response(
         failover_details=failover,
     )
     headers = {}
-    if e.retry_after is not None:
+    if e.retry_after is not None and e.retry_after > 0:
         headers["Retry-After"] = str(max(1, math.ceil(e.retry_after)))
     return JSONResponse(
         {

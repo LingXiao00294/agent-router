@@ -145,6 +145,17 @@ class TestProviderGateCooldown:
         remaining = gate.enter_cooldown("p1", 5.0)
         assert remaining > 25.0
 
+    async def test_enter_cooldown_honors_explicit_zero(self):
+        """Retry-After: 0 不应套用配置默认冷却."""
+        gate = ProviderGate()
+        cfg = _cfg(rate_limit_cooldown=30.0)
+        gate.configure([cfg])
+        remaining = gate.enter_cooldown("p1", 0.0)
+        assert remaining == 0.0
+        assert not gate.is_in_cooldown("p1")
+        async with gate.slot(cfg):
+            pass
+
     async def test_configure_unlimited_wakes_waiter(self):
         gate = ProviderGate()
         cfg = _cfg(max_concurrent=1, max_queue=2, queue_wait_timeout=2.0)

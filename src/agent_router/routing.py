@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Literal
 
 import structlog
@@ -400,7 +400,7 @@ class Router:
 
     async def route_stream(
         self, request_body: dict, outcome: dict | None = None
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes, None]:
         """流式路由: 返回第一个成功 provider 的 SSE 流.
 
         outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
@@ -444,11 +444,11 @@ class Router:
                     error_buffer = b""
                     async for chunk in provider.send_stream(request_body):
                         error_buffer += chunk
+                        # 先检测再截断，避免大 chunk 中靠前的 event:error 被 trim 掉
+                        _check_stream_error(error_buffer)
                         if len(error_buffer) > 8192:
                             error_buffer = error_buffer[-4096:]
-                        # 先检测流内错误再 yield，避免首包 event:error 被当成有效 SSE
-                        # （已 yield 后 client_started=True，异常不会再 failover）
-                        _check_stream_error(error_buffer)
+                        # 已 yield 后 client_started=True，异常不会再 failover
                         client_started = True
                         yield chunk
                     p_latency = (time.time() - p_start) * 1000

@@ -54,6 +54,69 @@ priority = 1
         finally:
             path.unlink()
 
+    def test_failover_allows_stale_pins(self):
+        """failover 模式下过期 pin 不阻止加载（sticky 才校验链成员）."""
+        toml = """
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+mode = "failover"
+
+[providers.p1]
+type = "anthropic"
+api_key = "k"
+base_url = "https://api.com"
+
+[models.test]
+pinned_provider = "gone"
+pinned_model = "old"
+
+[[models.test.providers]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            assert config.models["test"].pinned_provider == "gone"
+            assert config.models["test"].pinned_model == "old"
+        finally:
+            path.unlink()
+
+    def test_sticky_rejects_stale_pins(self, capsys):
+        toml = """
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+mode = "sticky"
+
+[providers.p1]
+type = "anthropic"
+api_key = "k"
+base_url = "https://api.com"
+
+[models.test]
+pinned_provider = "gone"
+pinned_model = "old"
+
+[[models.test.providers]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            with pytest.raises(SystemExit):
+                load_config(path)
+            assert "不在该虚拟模型的 provider 链中" in capsys.readouterr().err
+        finally:
+            path.unlink()
+
     def test_priority_sorting(self):
         toml = """
 [server]

@@ -245,9 +245,15 @@ export const useConfigStore = defineStore("config", () => {
           model: r.model,
           priority: i + 1,
         }));
-      // failover 不提交过期 pin，避免改 ref 后 pin 不匹配导致后端校验失败
+      // 保留仍匹配链的 pin（failover 下也写入，便于切回 sticky）；过期 pin 省略
       const modelCfg: VirtualModelConfig = { providers: providersList };
-      if (routerConfig.value.mode === "sticky") {
+      const pinMatches =
+        !!m.pinned_provider &&
+        !!m.pinned_model &&
+        providersList.some(
+          (r) => r.provider === m.pinned_provider && r.model === m.pinned_model
+        );
+      if (pinMatches) {
         modelCfg.pinned_provider = m.pinned_provider;
         modelCfg.pinned_model = m.pinned_model;
       }
@@ -302,6 +308,20 @@ export const useConfigStore = defineStore("config", () => {
       }
       if (!Number.isInteger(p.max_queue) || p.max_queue < 0) {
         errors[`providers[${i}].max_queue`] = "需为大于等于 0 的整数";
+      }
+      if (
+        typeof p.queue_wait_timeout !== "number" ||
+        !Number.isFinite(p.queue_wait_timeout) ||
+        p.queue_wait_timeout <= 0
+      ) {
+        errors[`providers[${i}].queue_wait_timeout`] = "需为大于 0 的数字";
+      }
+      if (
+        typeof p.rate_limit_cooldown !== "number" ||
+        !Number.isFinite(p.rate_limit_cooldown) ||
+        p.rate_limit_cooldown <= 0
+      ) {
+        errors[`providers[${i}].rate_limit_cooldown`] = "需为大于 0 的数字";
       }
     });
 

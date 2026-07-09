@@ -115,13 +115,12 @@ class ProviderGate:
         return max(0.0, state.cooldown_until - time.monotonic())
 
     def enter_cooldown(self, name: str, seconds: float | None = None) -> float:
-        """进入短冷却，返回当前剩余冷却秒数（含已有更长冷却）."""
+        """进入短冷却，返回当前剩余冷却秒数（含已有更长冷却）.
+
+        ``seconds=None`` 使用配置默认值；显式 ``0`` 表示立即可重试（不套默认冷却）。
+        """
         state = self._get(name)
-        duration = (
-            seconds
-            if seconds is not None and seconds > 0
-            else state.rate_limit_cooldown
-        )
+        duration = state.rate_limit_cooldown if seconds is None else max(0.0, seconds)
         until = time.monotonic() + duration
         if until > state.cooldown_until:
             state.cooldown_until = until

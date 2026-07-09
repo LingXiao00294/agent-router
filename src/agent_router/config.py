@@ -101,19 +101,11 @@ class VirtualModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_pin_pair(self) -> VirtualModelConfig:
+        """仅校验 pin 成对出现；链成员校验留给 sticky 模式（见 load_config）."""
         if not self.pinned_provider and not self.pinned_model:
             return self
         if not self.pinned_provider or not self.pinned_model:
             raise ValueError("pinned_provider 与 pinned_model 必须同时设置")
-        matched = any(
-            p.name == self.pinned_provider and p.model == self.pinned_model
-            for p in self.providers
-        )
-        if not matched:
-            raise ValueError(
-                f"pinned provider '{self.pinned_provider}:{self.pinned_model}' "
-                "不在该虚拟模型的 provider 链中"
-            )
         return self
 
 
@@ -322,6 +314,18 @@ def load_config(
                 print(
                     f"错误: 全局 sticky 模式下模型 '{vname}' 必须设置 "
                     "pinned_provider 与 pinned_model",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            matched = any(
+                p.name == vm.pinned_provider and p.model == vm.pinned_model
+                for p in vm.providers
+            )
+            if not matched:
+                print(
+                    f"错误: 模型 '{vname}' 的 pinned provider "
+                    f"'{vm.pinned_provider}:{vm.pinned_model}' "
+                    "不在该虚拟模型的 provider 链中",
                     file=sys.stderr,
                 )
                 sys.exit(1)
