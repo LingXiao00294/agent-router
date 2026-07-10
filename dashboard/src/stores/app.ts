@@ -71,7 +71,7 @@ export const useAppStore = defineStore("app", () => {
     if (savingMode.value) return;
     const configStore = useConfigStore();
     if (configStore.dirty) {
-      throw new Error("配置页有未保存更改，请先保存或重载后再切换 Mode");
+      throw new Error("配置页有未保存更改，请先保存或刷新后再切换 Mode");
     }
     const prev = config.value?.router.mode;
     if (prev === next) return;

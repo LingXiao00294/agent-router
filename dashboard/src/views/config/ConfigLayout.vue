@@ -33,7 +33,7 @@ async function save() {
   try {
     await store.save();
     await app.loadConfig(true);
-    toast.success("配置已更新并热重载");
+    toast.success("已刷新");
   } catch (err) {
     toast.error(err instanceof Error ? err.message : "保存失败");
   }
@@ -43,8 +43,8 @@ async function reload() {
   if (dirty.value) {
     const ok = await confirm.confirm({
       title: "放弃未保存更改？",
-      message: "重载将丢弃当前编辑，恢复为磁盘上的配置。",
-      confirmText: "重载",
+      message: "刷新将丢弃当前编辑，恢复为磁盘上的配置。",
+      confirmText: "刷新",
       danger: true,
     });
     if (!ok) return;
@@ -52,9 +52,9 @@ async function reload() {
   try {
     await store.load();
     await app.loadConfig(true);
-    toast.success("已从磁盘重载配置");
+    toast.success("已刷新");
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "重载失败");
+    toast.error(err instanceof Error ? err.message : "刷新失败");
   }
 }
 </script>
@@ -64,11 +64,11 @@ async function reload() {
     <header class="page-head">
       <div>
         <h1>Config</h1>
-        <p class="muted">编辑 config.toml 并热重载 · Ctrl/Cmd+S 保存</p>
+        <p class="muted">编辑 config.toml · Ctrl/Cmd+S 保存</p>
       </div>
       <div class="actions">
         <span v-if="dirty" class="badge badge-warn">未保存</span>
-        <button class="btn" type="button" :disabled="loading" @click="reload">重载</button>
+        <button class="btn" type="button" :disabled="loading" @click="reload">刷新</button>
         <button
           class="btn btn-primary"
           type="button"

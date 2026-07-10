@@ -104,7 +104,7 @@ function onKey(e: KeyboardEvent) {
         .save()
         .then(async () => {
           await app.loadConfig(true);
-          toast.success("配置已保存并热重载");
+          toast.success("已刷新");
         })
         .catch((err: Error) => toast.error(err.message));
     }

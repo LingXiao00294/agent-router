@@ -102,7 +102,7 @@ function onInterval(e: Event) {
               class="ctrl-select"
               :value="displayMode"
               :disabled="modeDisabled"
-              :title="dirty ? '配置页有未保存更改，请先保存或重载' : configLoading ? '配置加载中' : undefined"
+              :title="dirty ? '配置页有未保存更改，请先保存或刷新' : configLoading ? '配置加载中' : undefined"
               @change="onModeChange"
             >
               <option value="failover">Failover</option>
