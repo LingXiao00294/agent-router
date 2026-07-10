@@ -1,110 +1,100 @@
-<template>
-  <div class="stats-grid">
-    <template v-if="loading && !summary">
-      <UiCard v-for="i in 6" :key="i" class="stat-skeleton">
-        <UiSkeleton variant="text" class="skeleton-value" />
-        <UiSkeleton variant="text" class="skeleton-label" />
-      </UiCard>
-    </template>
-
-    <template v-else-if="summary">
-      <UiCard v-for="item in items" :key="item.label" class="stat-card" hoverable>
-        <div class="stat-value" :class="item.color">{{ item.value }}</div>
-        <div class="stat-label">{{ item.label }}</div>
-      </UiCard>
-    </template>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Summary } from "../api";
-import UiCard from "./ui/UiCard.vue";
-import UiSkeleton from "./ui/UiSkeleton.vue";
+import type { Summary } from "@/api/types";
+import {
+  formatLatency,
+  formatNumber,
+  formatTokens,
+  formatUsd,
+} from "@/utils/format";
 
-const props = defineProps<{
-  summary: Summary | null;
-  loading?: boolean;
-}>();
+const props = defineProps<{ summary: Summary | null }>();
 
-const rateColor = computed(() => {
-  if (!props.summary) return "";
-  const rate = props.summary.success_rate;
-  if (rate >= 99) return "success";
-  if (rate >= 90) return "warning";
-  return "danger";
-});
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
-  return String(n);
-}
-
-const items = computed(() => {
-  if (!props.summary) return [];
+const cards = computed(() => {
   const s = props.summary;
   return [
-    { label: "总调用数", value: String(s.total_calls), color: "" },
-    { label: "成功率", value: s.success_rate.toFixed(2) + "%", color: rateColor.value },
-    { label: "总 Token", value: formatTokens(s.total_input_tokens + s.total_output_tokens), color: "primary" },
-    { label: "总费用 (USD)", value: "$" + s.total_cost_usd.toFixed(4), color: "" },
-    { label: "平均延迟", value: s.avg_latency_ms + "ms", color: "" },
-    { label: "Cache 读取", value: formatTokens(s.total_cache_read), color: "info" },
+    {
+      key: "calls",
+      label: "总调用",
+      value: formatNumber(s?.total_calls ?? 0),
+      sub: s ? `${formatNumber(s.success_count)} 成功 / ${formatNumber(s.error_count)} 失败` : "—",
+    },
+    {
+      key: "rate",
+      label: "成功率",
+      value: s ? `${formatNumber(s.success_rate, 2)}%` : "—",
+      sub: "已是百分数",
+    },
+    {
+      key: "tokens",
+      label: "Token",
+      value: s
+        ? `${formatTokens(s.total_input_tokens)} / ${formatTokens(s.total_output_tokens)}`
+        : "—",
+      sub: s
+        ? `Cache R ${formatTokens(s.total_cache_read)} · W ${formatTokens(s.total_cache_write)}`
+        : "—",
+    },
+    {
+      key: "cost",
+      label: "费用",
+      value: formatUsd(s?.total_cost_usd ?? 0),
+      sub: `均延迟 ${formatLatency(s?.avg_latency_ms ?? null)}`,
+    },
   ];
 });
 </script>
 
+<template>
+  <div class="cards">
+    <article v-for="(c, i) in cards" :key="c.key" class="card panel" :style="{ animationDelay: `${i * 50}ms` }">
+      <div class="label">{{ c.label }}</div>
+      <div class="value mono">{{ c.value }}</div>
+      <div class="sub muted">{{ c.sub }}</div>
+    </article>
+  </div>
+</template>
+
 <style scoped>
-.stats-grid {
+.cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-.stat-card {
-  text-align: center;
-}
-.stat-value {
-  font-size: var(--text-2xl);
-  font-weight: var(--font-bold);
-  color: var(--color-text-default);
-  margin-bottom: var(--space-1);
-}
-.stat-value.success {
-  color: var(--color-success);
-}
-.stat-value.warning {
-  color: var(--color-warning);
-}
-.stat-value.danger {
-  color: var(--color-danger);
-}
-.stat-value.primary {
-  color: var(--color-primary);
-}
-.stat-value.info {
-  color: var(--color-info);
-}
-.stat-label {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
 }
 
-.stat-skeleton {
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+.card {
+  padding: 1rem 1.1rem;
+  animation: fade-up 0.4s ease both;
 }
-.skeleton-value {
-  width: 60%;
-  margin: 0 auto;
-  height: 32px;
+
+.label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
 }
-.skeleton-label {
-  width: 50%;
-  margin: 0 auto;
-  height: 16px;
+
+.value {
+  margin-top: 0.35rem;
+  font-size: 1.45rem;
+  font-weight: 600;
+}
+
+.sub {
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 1100px) {
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .cards {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

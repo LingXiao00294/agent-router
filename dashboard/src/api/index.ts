@@ -1,198 +1,96 @@
-import { request } from "./request";
+import { request } from "./client";
+import type {
+  ApiOk,
+  AppConfig,
+  CallsPage,
+  CallRecord,
+  CircuitBreakerMap,
+  DailyStat,
+  HealthResponse,
+  ModelStatReal,
+  ModelStatVirtual,
+  ProviderConfig,
+  ProviderStat,
+  Summary,
+  V1ModelsResponse,
+  VirtualModelConfig,
+} from "./types";
 
-const BASE = "/api";
+export * from "./types";
+export { ApiError, formatDetail } from "./client";
 
-export interface Summary {
-  total_calls: number;
-  success_count: number;
-  error_count: number;
-  success_rate: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_cache_read: number;
-  total_cache_write: number;
-  total_cost_usd: number;
-  avg_latency_ms: number;
+export function getHealth() {
+  return request<HealthResponse>("/health");
 }
 
-export interface FailoverEntry {
-  provider: string;
-  model: string;
-  error: string;
-  latency_ms?: number;
+export function getSummary() {
+  return request<Summary>("/api/metrics/summary");
 }
 
-export interface CallRecord {
-  id: string;
-  timestamp: string;
-  virtual_model: string;
-  provider_name: string | null;
-  provider_type: string | null;
-  provider_model: string | null;
-  provider_url: string | null;
-  attempt: number;
-  latency_ms: number | null;
-  status: string;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  cache_read_tokens: number | null;
-  cache_write_tokens: number | null;
-  cost_usd: number | null;
-  error_type: string | null;
-  error_message: string | null;
-  request_body: string | null;
-  response_body: string | null;
-  request_tokens: number | null;
-  failover_details: string | null;
+export function getByModel() {
+  return request<ModelStatVirtual[]>("/api/metrics/by-model");
 }
 
-export interface CallsPage {
-  data: CallRecord[];
-  total: number;
-  page: number;
-  size: number;
-  pages: number;
+export function getByRealModel() {
+  return request<ModelStatReal[]>("/api/metrics/by-real-model");
 }
 
-export interface ModelStat {
+export function getByProvider() {
+  return request<ProviderStat[]>("/api/metrics/by-provider");
+}
+
+export function getDaily(days = 30) {
+  return request<DailyStat[]>(`/api/metrics/daily?days=${days}`);
+}
+
+export function getCalls(params: {
+  page?: number;
+  size?: number;
   model?: string;
-  virtual_model?: string;
-  count: number;
-  success_count: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_cost_usd: number;
+  status?: string;
+} = {}) {
+  const q = new URLSearchParams();
+  q.set("page", String(params.page ?? 1));
+  q.set("size", String(params.size ?? 50));
+  if (params.model) q.set("model", params.model);
+  if (params.status) q.set("status", params.status);
+  return request<CallsPage>(`/api/calls?${q}`);
 }
 
-export interface ProviderStat {
-  provider: string;
-  count: number;
-  success_count: number;
+export function getCall(id: string) {
+  return request<CallRecord>(`/api/calls/${encodeURIComponent(id)}`);
 }
 
-export interface DailyStat {
-  day: string;
-  count: number;
-  success_count: number;
-  cost_usd: number;
+export function getConfig() {
+  return request<AppConfig>("/api/config");
 }
 
-export interface ServerConfig {
-  host: string;
-  port: number;
-  log_level: string;
-  log_file: string;
-  log_max_bytes: number;
-  log_backup_count: number;
+export function getConfigProviders() {
+  return request<Record<string, ProviderConfig>>("/api/config/providers");
 }
 
-export interface RouterConfig {
-  failure_threshold: number;
-  recovery_timeout: number;
-  mode: "failover" | "sticky";
+export function getConfigModels() {
+  return request<Record<string, VirtualModelConfig>>("/api/config/models");
 }
 
-export interface ProviderConfig {
-  type: string;
-  base_url: string;
-  api_key: string;
-  timeout_seconds: number;
-  has_key?: boolean;
-  failure_threshold?: number | null;
-  recovery_timeout?: number | null;
-  max_concurrent?: number;
-  max_queue?: number;
-  queue_wait_timeout?: number;
-  rate_limit_cooldown?: number;
-}
-
-export interface ModelRef {
-  provider: string;
-  model: string;
-  priority: number;
-}
-
-export interface VirtualModelConfig {
-  pinned_provider?: string | null;
-  pinned_model?: string | null;
-  providers: ModelRef[];
-}
-
-export interface AppConfig {
-  server: ServerConfig;
-  router: RouterConfig;
-  providers: Record<string, ProviderConfig>;
-  models: Record<string, VirtualModelConfig | ModelRef[]>;
-}
-
-export interface CircuitBreakerState {
-  status: "ok";
-  provider: string;
-}
-
-export function fetchSummary(): Promise<Summary> {
-  return request<Summary>(`${BASE}/metrics/summary`);
-}
-
-export function fetchCalls(
-  page = 1,
-  size = 50,
-  model = "",
-  status = ""
-): Promise<CallsPage> {
-  const params = new URLSearchParams({ page: String(page), size: String(size) });
-  if (model) params.set("model", model);
-  if (status) params.set("status", status);
-  return request<CallsPage>(`${BASE}/calls?${params}`);
-}
-
-export function fetchCallDetail(id: string): Promise<CallRecord> {
-  return request<CallRecord>(`${BASE}/calls/${encodeURIComponent(id)}`);
-}
-
-export function fetchByModel(): Promise<ModelStat[]> {
-  return request<ModelStat[]>(`${BASE}/metrics/by-model`);
-}
-
-export function fetchByRealModel(): Promise<ModelStat[]> {
-  return request<ModelStat[]>(`${BASE}/metrics/by-real-model`);
-}
-
-export function fetchByProvider(): Promise<ProviderStat[]> {
-  return request<ProviderStat[]>(`${BASE}/metrics/by-provider`);
-}
-
-export function fetchDailyTrend(days = 30): Promise<DailyStat[]> {
-  return request<DailyStat[]>(`${BASE}/metrics/daily?days=${days}`);
-}
-
-export function fetchConfig(): Promise<AppConfig> {
-  return request<AppConfig>(`${BASE}/config`);
-}
-
-export function fetchConfigModels(): Promise<Record<string, VirtualModelConfig>> {
-  return request<Record<string, VirtualModelConfig>>(`${BASE}/config/models`);
-}
-
-export function updateConfig(body: AppConfig): Promise<{ status: string; message: string }> {
-  return request<{ status: string; message: string }>(`${BASE}/config`, {
+export function putConfig(body: AppConfig) {
+  return request<ApiOk>("/api/config", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-export function fetchCircuitBreakerStates(): Promise<Record<string, string>> {
-  return request<Record<string, string>>(`${BASE}/circuit-breaker`);
+export function getCircuitBreaker() {
+  return request<CircuitBreakerMap>("/api/circuit-breaker");
 }
 
-export function resetCircuitBreaker(provider: string): Promise<CircuitBreakerState> {
-  return request<CircuitBreakerState>(
-    `${BASE}/circuit-breaker/${encodeURIComponent(provider)}/reset`,
-    { method: "POST" }
+export function resetCircuitBreaker(provider: string) {
+  return request<ApiOk>(
+    `/api/circuit-breaker/${encodeURIComponent(provider)}/reset`,
+    { method: "POST" },
   );
 }
 
-export function fetchModels(): Promise<{ data: { id: string; type: string; display_name: string; created_at: string }[] }> {
-  return request("/v1/models");
+export function getV1Models() {
+  return request<V1ModelsResponse>("/v1/models");
 }

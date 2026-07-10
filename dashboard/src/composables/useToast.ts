@@ -1,38 +1,51 @@
-import { reactive } from "vue";
+import { inject, provide, ref, type InjectionKey, type Ref } from "vue";
 
-export type ToastType = "success" | "error" | "warning" | "info";
+export type ToastKind = "success" | "error" | "info";
 
 export interface ToastItem {
   id: number;
+  kind: ToastKind;
   message: string;
-  type: ToastType;
-  duration: number;
 }
 
-let idCounter = 0;
+interface ToastApi {
+  toasts: Ref<ToastItem[]>;
+  push: (message: string, kind?: ToastKind) => void;
+  success: (message: string) => void;
+  error: (message: string) => void;
+  dismiss: (id: number) => void;
+}
 
-export const toasts = reactive<ToastItem[]>([]);
+const KEY: InjectionKey<ToastApi> = Symbol("toast");
 
-export function addToast(message: string, type: ToastType = "info", duration = 3000): void {
-  const id = ++idCounter;
-  toasts.push({ id, message, type, duration });
+let seq = 0;
 
-  if (duration > 0) {
-    setTimeout(() => removeToast(id), duration);
+export function provideToast(): ToastApi {
+  const toasts = ref<ToastItem[]>([]);
+
+  function dismiss(id: number) {
+    toasts.value = toasts.value.filter((t) => t.id !== id);
   }
-}
 
-export function removeToast(id: number): void {
-  const idx = toasts.findIndex((t) => t.id === id);
-  if (idx >= 0) toasts.splice(idx, 1);
-}
+  function push(message: string, kind: ToastKind = "info") {
+    const id = ++seq;
+    toasts.value = [...toasts.value, { id, kind, message }];
+    window.setTimeout(() => dismiss(id), 4200);
+  }
 
-export function useToast() {
-  return {
-    success: (message: string, duration?: number) => addToast(message, "success", duration),
-    error: (message: string, duration?: number) => addToast(message, "error", duration),
-    warning: (message: string, duration?: number) => addToast(message, "warning", duration),
-    info: (message: string, duration?: number) => addToast(message, "info", duration),
-    remove: removeToast,
+  const api: ToastApi = {
+    toasts,
+    push,
+    success: (m) => push(m, "success"),
+    error: (m) => push(m, "error"),
+    dismiss,
   };
+  provide(KEY, api);
+  return api;
+}
+
+export function useToast(): ToastApi {
+  const api = inject(KEY);
+  if (!api) throw new Error("Toast not provided");
+  return api;
 }
