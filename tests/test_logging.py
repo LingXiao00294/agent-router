@@ -274,7 +274,12 @@ async def test_streaming_request_id_propagates(tmp_path):
     import httpx
 
     from agent_router.app import _stream_wrapper
-    from agent_router.config import AppConfig, ProviderConfig, ServerConfig
+    from agent_router.config import (
+        AppConfig,
+        ProviderConfig,
+        ServerConfig,
+        VirtualModelConfig,
+    )
     from agent_router.db import CallStore
     from agent_router.routing import Router
 
@@ -295,16 +300,18 @@ async def test_streaming_request_id_propagates(tmp_path):
     config = AppConfig(
         server=ServerConfig(host="127.0.0.1", port=9456),
         models={
-            "vm": [
-                ProviderConfig(
-                    type="anthropic",
-                    name="anthropic",
-                    model="claude-haiku-4-5",
-                    api_key="sk-ant-test",
-                    base_url="https://api.anthropic.com",
-                    priority=1,
-                )
-            ]
+            "vm": VirtualModelConfig(
+                providers=[
+                    ProviderConfig(
+                        type="anthropic",
+                        name="anthropic",
+                        model="claude-haiku-4-5",
+                        api_key="sk-ant-test",
+                        base_url="https://api.anthropic.com",
+                        priority=1,
+                    )
+                ]
+            )
         },
     )
     router_engine = Router(config, http_client)

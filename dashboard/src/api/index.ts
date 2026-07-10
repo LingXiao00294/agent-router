@@ -89,6 +89,7 @@ export interface ServerConfig {
 export interface RouterConfig {
   failure_threshold: number;
   recovery_timeout: number;
+  mode: "failover" | "sticky";
 }
 
 export interface ProviderConfig {
@@ -99,6 +100,10 @@ export interface ProviderConfig {
   has_key?: boolean;
   failure_threshold?: number | null;
   recovery_timeout?: number | null;
+  max_concurrent?: number;
+  max_queue?: number;
+  queue_wait_timeout?: number;
+  rate_limit_cooldown?: number;
 }
 
 export interface ModelRef {
@@ -107,11 +112,17 @@ export interface ModelRef {
   priority: number;
 }
 
+export interface VirtualModelConfig {
+  pinned_provider?: string | null;
+  pinned_model?: string | null;
+  providers: ModelRef[];
+}
+
 export interface AppConfig {
   server: ServerConfig;
   router: RouterConfig;
   providers: Record<string, ProviderConfig>;
-  models: Record<string, ModelRef[]>;
+  models: Record<string, VirtualModelConfig | ModelRef[]>;
 }
 
 export interface CircuitBreakerState {
@@ -159,8 +170,8 @@ export function fetchConfig(): Promise<AppConfig> {
   return request<AppConfig>(`${BASE}/config`);
 }
 
-export function fetchConfigModels(): Promise<Record<string, ModelRef[]>> {
-  return request<Record<string, ModelRef[]>>(`${BASE}/config/models`);
+export function fetchConfigModels(): Promise<Record<string, VirtualModelConfig>> {
+  return request<Record<string, VirtualModelConfig>>(`${BASE}/config/models`);
 }
 
 export function updateConfig(body: AppConfig): Promise<{ status: string; message: string }> {

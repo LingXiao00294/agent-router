@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
-from agent_router.config import AppConfig, ProviderConfig, ServerConfig
+from agent_router.config import (
+    AppConfig,
+    ProviderConfig,
+    RouterConfig,
+    ServerConfig,
+    VirtualModelConfig,
+)
 from agent_router.routing import (
     Router,
     UnknownModelError,
@@ -37,24 +44,26 @@ class TestRouterModelLookup:
         config = AppConfig(
             server=ServerConfig(),
             models={
-                "m": [
-                    ProviderConfig(
-                        type="anthropic",
-                        name="missing",
-                        model="m1",
-                        api_key="${MISSING_KEY}",
-                        base_url="https://missing.test",
-                        priority=1,
-                    ),
-                    ProviderConfig(
-                        type="anthropic",
-                        name="ready",
-                        model="m2",
-                        api_key="sk-ready",
-                        base_url="https://ready.test",
-                        priority=2,
-                    ),
-                ]
+                "m": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="missing",
+                            model="m1",
+                            api_key="${MISSING_KEY}",
+                            base_url="https://missing.test",
+                            priority=1,
+                        ),
+                        ProviderConfig(
+                            type="anthropic",
+                            name="ready",
+                            model="m2",
+                            api_key="sk-ready",
+                            base_url="https://ready.test",
+                            priority=2,
+                        ),
+                    ]
+                )
             },
         )
         router = Router(config, http_client)
@@ -67,16 +76,18 @@ class TestRouterModelLookup:
         config = AppConfig(
             server=ServerConfig(),
             models={
-                "m": [
-                    ProviderConfig(
-                        type="anthropic",
-                        name="missing",
-                        model="m1",
-                        api_key="${MISSING_KEY}",
-                        base_url="https://missing.test",
-                        priority=1,
-                    ),
-                ]
+                "m": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="missing",
+                            model="m1",
+                            api_key="${MISSING_KEY}",
+                            base_url="https://missing.test",
+                            priority=1,
+                        ),
+                    ]
+                )
             },
         )
         router = Router(config, http_client)
@@ -132,11 +143,13 @@ class TestCheckStreamError:
         with pytest.raises(RetryableError, match="rate_limit_error") as exc_info:
             _check_stream_error(buf)
         assert exc_info.value.immediate_break is False
+        assert exc_info.value.rate_limited is True
 
     def test_overloaded_error_raises_retryable(self):
         buf = _sse_error_buffer("overloaded_error", "Server busy")
-        with pytest.raises(RetryableError, match="overloaded_error"):
+        with pytest.raises(RetryableError, match="overloaded_error") as exc_info:
             _check_stream_error(buf)
+        assert exc_info.value.rate_limited is True
 
     def test_unknown_error_type_raises_non_retryable(self):
         """Unknown error types should raise NonRetryableError."""
@@ -163,3 +176,342 @@ class TestCheckStreamError:
         )
         with pytest.raises(RetryableError, match="api_error"):
             _check_stream_error(buf)
+
+
+class TestRateLimitRouting:
+    async def test_rate_limit_does_not_trip_circuit(self, http_client):
+        """429 进入短冷却，不计入熔断连续失败."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    429, text="rate limited", headers={"Retry-After": "60"}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "model": "m2",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                                failure_threshold=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            result = await router.route_non_stream(
+                {"model": "m", "max_tokens": 10, "messages": []}
+            )
+            assert result["model"] == "m2"
+            # p1 未熔断
+            from agent_router.circuit_breaker import CircuitState
+
+            assert (await router.circuit_breaker.state("p1")) == CircuitState.CLOSED
+            assert router.provider_gate.is_in_cooldown("p1")
+
+    async def test_sticky_does_not_failover(self, http_client):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="boom")
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                router=RouterConfig(mode="sticky"),
+                models={
+                    "m": VirtualModelConfig(
+                        pinned_provider="p1",
+                        pinned_model="m1",
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ],
+                    )
+                },
+            )
+            router = Router(config, client)
+            with pytest.raises(AllProvidersFailedError) as exc:
+                await router.route_non_stream(
+                    {"model": "m", "max_tokens": 10, "messages": []}
+                )
+            assert len(exc.value.errors) == 1
+            assert exc.value.errors[0]["provider"] == "p1"
+
+    async def test_sticky_rate_limit_raises_no_provider(self, http_client):
+        from agent_router.routing import NoProviderAvailableError
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, text="rl", headers={"Retry-After": "9"})
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                router=RouterConfig(mode="sticky"),
+                models={
+                    "m": VirtualModelConfig(
+                        pinned_provider="p1",
+                        pinned_model="m1",
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                        ],
+                    )
+                },
+            )
+            router = Router(config, client)
+            with pytest.raises(NoProviderAvailableError) as exc:
+                await router.route_non_stream(
+                    {"model": "m", "max_tokens": 10, "messages": []}
+                )
+            assert exc.value.kind == "rate_limit"
+            assert exc.value.retry_after == pytest.approx(9.0, abs=0.05)
+
+    async def test_sticky_missing_pin_raises_clear_error(self, http_client):
+        config = AppConfig(
+            server=ServerConfig(),
+            router=RouterConfig(mode="sticky"),
+            models={
+                "m": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="p1",
+                            model="m1",
+                            api_key="k1",
+                            base_url="https://p1.test",
+                            priority=1,
+                        ),
+                    ]
+                )
+            },
+        )
+        # 绕过 load_config 校验，模拟运行时 pin 丢失
+        config.models["m"].pinned_provider = None
+        config.models["m"].pinned_model = None
+        router = Router(config, http_client)
+        with pytest.raises(AllProvidersFailedError) as exc:
+            await router._get_providers("m")
+        assert "pinned_provider" in str(exc.value)
+
+    async def test_stream_does_not_failover_after_yield(self, http_client):
+        """已向客户端发送字节后，流内错误不再切换 provider."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if "p1" in str(request.url):
+                # 分 chunk 返回，确保 message_start 先 yield 后再出现流内错误
+                async def body():
+                    yield (
+                        b"event: message_start\ndata: "
+                        b'{"type":"message_start","message":{}}\n\n'
+                    )
+                    yield (
+                        b'event: error\ndata: {"type":"error","error":'
+                        b'{"type":"api_error","message":"mid"}}\n\n'
+                    )
+
+                return httpx.Response(200, content=body())
+            return httpx.Response(
+                200,
+                content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            chunks: list[bytes] = []
+            with pytest.raises(RetryableError, match="api_error"):
+                async for chunk in router.route_stream(
+                    {"model": "m", "max_tokens": 10, "messages": [], "stream": True}
+                ):
+                    chunks.append(chunk)
+            assert chunks  # 已 yield 过
+            assert calls["n"] == 1  # 未打到 p2
+
+    async def test_stream_error_detected_before_buffer_trim(self, http_client):
+        """大 chunk 中靠前的 event:error 在 trim 前仍应被检测到."""
+        calls = {"n": 0}
+        padding = b"x" * 9000
+        error_event = (
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"api_error","message":"early"}}\n\n'
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if "p1" in str(request.url):
+                return httpx.Response(200, content=error_event + padding)
+            return httpx.Response(
+                200,
+                content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            chunks: list[bytes] = []
+            async for chunk in router.route_stream(
+                {"model": "m", "max_tokens": 10, "messages": [], "stream": True}
+            ):
+                chunks.append(chunk)
+            assert calls["n"] == 2
+            assert b"message_start" in b"".join(chunks)
+
+    async def test_stream_error_before_yield_allows_failover(self, http_client):
+        """首包即为 event:error 时不应先发给客户端，应可 failover."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if "p1" in str(request.url):
+                body = (
+                    b'event: error\ndata: {"type":"error","error":'
+                    b'{"type":"api_error","message":"first"}}\n\n'
+                )
+                return httpx.Response(200, content=body)
+            return httpx.Response(
+                200,
+                content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            chunks: list[bytes] = []
+            async for chunk in router.route_stream(
+                {"model": "m", "max_tokens": 10, "messages": [], "stream": True}
+            ):
+                chunks.append(chunk)
+            assert calls["n"] == 2
+            assert chunks
+            assert b"message_start" in chunks[0]
+            assert b"event: error" not in b"".join(chunks)

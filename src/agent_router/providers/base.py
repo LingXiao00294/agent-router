@@ -15,9 +15,18 @@ class NonRetryableError(Exception):
 class RetryableError(Exception):
     """可重试的错误 (5xx、429、超时、连接错误等)."""
 
-    def __init__(self, message: str, *, immediate_break: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        immediate_break: bool = False,
+        rate_limited: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.immediate_break = immediate_break
+        self.rate_limited = rate_limited
+        self.retry_after = retry_after
 
 
 class BaseProvider(ABC):

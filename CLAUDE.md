@@ -33,34 +33,44 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 
 ### 配置层 (`config.py`)
 
-- `config.toml` 定义 `[server]`、`[router]`、`[providers.*]`、`[[models.*]]`
+- `config.toml` 定义 `[server]`、`[router]`、`[providers.*]`、`[models.*]` + `[[models.*.providers]]`
+- 旧格式 `[[models.*]]` list 仍可读，写入统一为新格式
 - `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开
-- 虚拟模型 → 按 priority 排序的 `list[ProviderConfig]`
-- `[router]` 段配置全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
-- 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`（在 `[providers.*]` 段），**覆盖**全局默认值；路由时实际生效的是 provider 级别的值（见 `routing.py` 中 `provider_cfg.failure_threshold`）
+- 虚拟模型 → `VirtualModelConfig`（可选 `pinned_*` + 按 priority 排序的 `providers`）
+- `[router].mode`：`failover`（默认）按 priority 故障转移；`sticky` 时各虚拟模型钉死各自的 `pinned_provider`+`pinned_model`，任何失败都不转移
+- `[router]` 另含全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
+- 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`，以及本地限流：`max_concurrent`（0=不限）、`max_queue`（0=不排）、`queue_wait_timeout`、`rate_limit_cooldown`
 - provider `name` 字段来自 TOML 中的 `[providers.<name>]` 键，无需显式填写
 - `load_config` 校验失败时调用 `sys.exit(1)`；热重载时 app 层捕获 `SystemExit` 转为 `RuntimeError`，保留旧配置不变
 - `.env` 和 `config.toml` 已在 `.gitignore` 中，不会提交
 
 ### 路由层 (`routing.py`)
 
-- `Router` 接收虚拟模型名，按优先级遍历 provider 列表
-- 成功时返回第一个 provider 的响应，失败时尝试下一个（可重试错误）或立即失败（不可重试错误）
+- `Router` 接收虚拟模型名；按全局 `router.mode`：failover 按优先级遍历，sticky 仅尝试该模型的 pinned 一项
+- 成功时返回第一个 provider 的响应，失败时按模式故障转移或立即失败
 - 支持流式（`route_stream` → `AsyncIterator[bytes]`）和非流式（`route_non_stream` → `dict`）
-- `RetryableError`: 429、529、5xx、连接/超时错误 → 故障转移
+- `RetryableError(rate_limited=True)`: 429、529、流内 `rate_limit_error`/`overloaded_error` → 短冷却，**不计入**熔断；failover 跳过该 provider
+- `RetryableError`: 5xx、连接/超时错误 → 故障转移 + 计入熔断连续失败
 - `RetryableError(immediate_break=True)`: 401、403 → 故障转移 + 立即熔断该 provider
 - `NonRetryableError`: 4xx（不含 401/403/429）、协议错误 → 立即失败
-- **SSE 流内错误检测**（`_check_stream_error`）：部分 provider 返回 HTTP 200 但在 SSE 流体中夹带 `event: error`（如限流）；路由层扫描流缓冲区，按 error type 分类为可重试/立即熔断/不可重试。非已知类型的流错误默认按**不可重试**处理（不盲目故障转移）
-- 熔断器过滤已熔断的 provider，不再对其发起新请求；若所有 provider 均已熔断，直接抛 `AllProvidersFailedError`
+- **SSE 流内错误检测**（`_check_stream_error`）：部分 provider 返回 HTTP 200 但在 SSE 流体中夹带 `event: error`；限流类标记 `rate_limited`
+- 熔断器与冷却过滤不可用 provider；全部不可用时抛 `AllProvidersFailedError`（502）或 `NoProviderAvailableError`（429/503）
 - `outcome` 字典贯穿路由方法，用于捕获实际命中的 provider 信息和故障转移明细，供 app 层写入数据库
-- `reload_config` 热重载保留 http_client 和熔断器状态
+- `reload_config` 热重载保留 http_client、熔断器状态与冷却状态
+
+### ProviderGate (`provider_gate.py`)
+
+- Per-provider 本地并发限制（`asyncio.Semaphore`）、有界排队、短冷却
+- 默认 `max_concurrent=0` / `max_queue=0` → 不限制、不排队（保持旧行为）
+- 上游限流进入冷却（尊重 `Retry-After`，否则用 `rate_limit_cooldown`）
+- 流式请求在整个 SSE 消费周期持有 slot
 
 ### 熔断器 (`circuit_breaker.py`)
 
 - Per-provider 熔断器，三态：`CLOSED` → `OPEN` → `HALF_OPEN` → `CLOSED`
 - 401/403（认证失败）→ 立即熔断（`immediate_break=True`），不会自动恢复
-- 429/529/5xx 连续失败达阈值（默认 5 次，可通过 `[router].failure_threshold` 配置）→ 熔断
-- 熔断后等待恢复超时（默认 600s，可通过 `[router].recovery_timeout` 配置）→ 进入半开状态，允许一次探测请求
+- 5xx / 连接错误连续失败达阈值（默认 5 次）→ 熔断；**429/529/overloaded 走短冷却，不走熔断**
+- 熔断后等待恢复超时（默认 600s）→ 进入半开状态，允许一次探测请求
 - 探测成功 → 关闭熔断器；探测失败 → 重新熔断
 
 ### Provider 层 (`providers/`)
@@ -74,7 +84,7 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 - FastAPI 应用，lifespan 中初始化 CallStore 和 httpx 客户端
 - 流式响应包装器 `_stream_wrapper` 从 SSE 流中正则提取 usage token 信息后写入数据库
 - Dashboard 静态文件挂载在 `/assets`，SPA fallback 路由放在最后
-- 错误处理: UnknownModelError → 400，AllProvidersFailedError → 502
+- 错误处理: UnknownModelError → 400；NoProviderAvailableError(capacity) → 503 + Retry-After；NoProviderAvailableError(rate_limit) → 429 + Retry-After；AllProvidersFailedError → 502
 
 ### 数据层 (`db.py`)
 
@@ -106,11 +116,12 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 
 - Vue 3 + Vite + TypeScript + ECharts + Vue Router
 - 页面: Dashboard（统计卡片、模型图表、调用表格、趋势图）、Config（配置管理）
+- 仪表盘顶部可切换全局 failover/sticky；虚拟模型页每行常驻指定开关（failover 时无效）；Providers 卡片可配置本地限流字段
 - 开发时 Vite dev server 将 `/api`、`/health`、`/v1` 代理到后端
 
 ## 测试
 
-- `conftest.py`: 提供 `sample_config`（虚拟模型 → mock provider，provider 含 `name` 字段）和 `http_client` fixture
+- `conftest.py`: 提供 `sample_config`（虚拟模型 → `VirtualModelConfig`，provider 含 `name` 字段）和 `http_client` fixture
 - `pytest.ini_options`: `asyncio_mode = "auto"`，所有测试自动支持 async
-- 使用 `pytest-httpx` 模拟 HTTP 响应
-- 测试文件：`test_routing.py`（路由核心）、`test_circuit_breaker.py`（熔断器 + Router 集成）、`test_config.py`（配置加载/热重载）、`test_providers.py`（provider 适配器）、`test_integration.py`（端到端集成）
+- 使用 `pytest-httpx` / `httpx.MockTransport` 模拟 HTTP 响应
+- 测试文件：`test_routing.py`（路由核心 + sticky/限流）、`test_provider_gate.py`（并发/排队/冷却）、`test_circuit_breaker.py`、`test_config.py`、`test_providers.py`、`test_integration.py`

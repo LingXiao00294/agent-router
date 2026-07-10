@@ -59,9 +59,11 @@ class TestAnthropicCompatProvider:
 
     @pytest.mark.asyncio
     async def test_send_retryable_429(self):
-        """测试 HTTP 429 触发可重试错误."""
+        """测试 HTTP 429 触发可重试限流错误."""
         transport = httpx.MockTransport(
-            lambda request: httpx.Response(429, text="rate limited")
+            lambda request: httpx.Response(
+                429, text="rate limited", headers={"Retry-After": "15"}
+            )
         )
         config = ProviderConfig(
             type="anthropic",
@@ -72,8 +74,29 @@ class TestAnthropicCompatProvider:
         )
         async with httpx.AsyncClient(transport=transport) as client:
             provider = AnthropicCompatProvider(config, client)
-            with pytest.raises(RetryableError):
+            with pytest.raises(RetryableError) as exc:
                 await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+            assert exc.value.rate_limited is True
+            assert exc.value.retry_after == 15.0
+
+    @pytest.mark.asyncio
+    async def test_send_retryable_529(self):
+        """测试 HTTP 529 触发可重试限流错误."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(529, text="overloaded")
+        )
+        config = ProviderConfig(
+            type="anthropic",
+            model="test",
+            api_key="sk-test",
+            base_url="https://api.example.com",
+            priority=1,
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            provider = AnthropicCompatProvider(config, client)
+            with pytest.raises(RetryableError) as exc:
+                await provider.send({"model": "test", "max_tokens": 10, "messages": []})
+            assert exc.value.rate_limited is True
 
     @pytest.mark.asyncio
     async def test_send_retryable_401(self):

@@ -53,6 +53,34 @@
           placeholder="默认"
           @update:model-value="(v) => (entry.recovery_timeout = v === '' ? null : Number(v))"
         />
+        <UiInput
+          v-model.number="entry.max_concurrent"
+          label="最大并发（0=不限）"
+          type="number"
+          :error="maxConcurrentError"
+          @blur="emit('touch-limits')"
+        />
+        <UiInput
+          v-model.number="entry.max_queue"
+          label="排队上限（0=不排）"
+          type="number"
+          :error="maxQueueError"
+          @blur="emit('touch-limits')"
+        />
+        <UiInput
+          v-model.number="entry.queue_wait_timeout"
+          label="排队等待超时（秒）"
+          type="number"
+          :error="queueWaitTimeoutError"
+          @blur="emit('touch-limits')"
+        />
+        <UiInput
+          v-model.number="entry.rate_limit_cooldown"
+          label="限流冷却（秒）"
+          type="number"
+          :error="rateLimitCooldownError"
+          @blur="emit('touch-limits')"
+        />
       </div>
     </div>
   </UiCard>
@@ -70,12 +98,17 @@ defineProps<{
   entry: ProviderEntry;
   nameError?: string;
   timeoutError?: string;
+  maxConcurrentError?: string;
+  maxQueueError?: string;
+  queueWaitTimeoutError?: string;
+  rateLimitCooldownError?: string;
 }>();
 
 const emit = defineEmits<{
   remove: [];
   "touch-name": [];
   "touch-timeout": [];
+  "touch-limits": [];
 }>();
 
 const collapsed = ref(false);

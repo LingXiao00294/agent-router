@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import httpx
@@ -17,7 +20,12 @@ from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig, load_config
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
-from agent_router.routing import AllProvidersFailedError, Router, UnknownModelError
+from agent_router.routing import (
+    AllProvidersFailedError,
+    NoProviderAvailableError,
+    Router,
+    UnknownModelError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -28,6 +36,11 @@ _SSE_MSG_START_RE = re.compile(
 _SSE_MSG_DELTA_RE = re.compile(
     rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
 )
+
+# 预取首字节最长等待：超时后仍先返回 SSE 响应头，避免代理因无头超时；
+# 快速失败（冷却/容量/全失败）仍可在超时内转成 HTTP 429/503/502。
+# 超时后的限流会变成流内 error（HTTP 200），属有意取舍。
+_STREAM_FIRST_BYTE_PREFETCH_TIMEOUT = 5.0
 
 # 合法 X-Request-ID：仅字母数字与 - _，长度 ≤128；违规则回退到生成的 uuid，
 # 避免客户端注入超长/特殊字符污染日志与响应头。
@@ -67,6 +80,7 @@ def create_app(
     )
 
     router_engine = Router(config, http_client)
+    app.state.router_engine = router_engine
 
     # 注册 metrics API
     metrics_router = create_metrics_router(store)
@@ -79,7 +93,7 @@ def create_app(
         except SystemExit:
             raise RuntimeError("新配置语义无效，旧配置保持不变")
         # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
-        await router_engine.reload_config(new_config)
+        await app.state.router_engine.reload_config(new_config)
         reconfigure_logging(
             level=new_config.server.log_level,
             log_file=new_config.server.log_file,
@@ -97,13 +111,13 @@ def create_app(
     @app.get("/api/circuit-breaker")
     async def get_circuit_breaker_states():
         """返回所有 provider 的熔断状态."""
-        states = await router_engine.circuit_breaker.get_all_states()
+        states = await app.state.router_engine.circuit_breaker.get_all_states()
         return {name: state.value for name, state in states.items()}
 
     @app.post("/api/circuit-breaker/{provider}/reset")
     async def reset_circuit_breaker(provider: str):
         """重置指定 provider 的熔断状态."""
-        await router_engine.circuit_breaker.reset(provider)
+        await app.state.router_engine.circuit_breaker.reset(provider)
         return {"status": "ok", "provider": provider}
 
     @app.get("/v1/models")
@@ -117,7 +131,7 @@ def create_app(
                     "display_name": name,
                     "created_at": "2025-01-01T00:00:00Z",
                 }
-                for name in router_engine.model_names
+                for name in app.state.router_engine.model_names
             ]
         }
 
@@ -132,13 +146,54 @@ def create_app(
         # 中间件返回后才被 ASGI 消费，此时中间件已 unbind request_id，
         # routing 层会 fallback 到新 uuid 而与 http.request 日志断链。
         request_id = get_contextvars().get("request_id")
+        engine: Router = request.app.state.router_engine
 
         try:
             if is_stream:
                 outcome: dict = {}
+                # 有界预取首个 chunk：快速失败可转 HTTP 429/503/502；
+                # 超时则先返回 SSE 头，继续在响应体中等待首字节。
+                stream_agen: AsyncGenerator[bytes, None] = engine.route_stream(
+                    body, outcome
+                )
+                try:
+                    first_chunk, pending_first = await _prefetch_first_chunk(
+                        stream_agen
+                    )
+                except NoProviderAvailableError as e:
+                    await _close_prefetched_stream(stream_agen, None)
+                    return await _no_provider_response(
+                        e, store, virtual_model, body, start_time
+                    )
+                except AllProvidersFailedError as e:
+                    await _close_prefetched_stream(stream_agen, None)
+                    return await _all_failed_response(
+                        e, store, virtual_model, body, start_time
+                    )
+                except UnknownModelError:
+                    await _close_prefetched_stream(stream_agen, None)
+                    raise
+
+                async def _prepended() -> AsyncGenerator[bytes, None]:
+                    # 客户端中途断开时必须 aclose 预取的 generator，
+                    # 否则 ProviderGate.slot / 上游响应会一直占用到 GC。
+                    try:
+                        chunk = first_chunk
+                        if pending_first is not None:
+                            try:
+                                chunk = await pending_first
+                            except StopAsyncIteration:
+                                chunk = None
+                        if chunk is not None:
+                            yield chunk
+                        async for more in stream_agen:
+                            yield more
+                    finally:
+                        await _close_prefetched_stream(stream_agen, pending_first)
+
                 return StreamingResponse(
                     _stream_wrapper(
-                        router_engine.route_stream(body, outcome),
+                        _prepended(),
                         outcome=outcome,
                         store=store,
                         virtual_model=virtual_model,
@@ -155,7 +210,7 @@ def create_app(
                 )
             else:
                 outcome: dict = {}
-                result = await router_engine.route_non_stream(body, outcome)
+                result = await engine.route_non_stream(body, outcome)
                 latency_ms = int((time.time() - start_time) * 1000)
                 usage = result.get("usage", {})
                 await store.record(
@@ -197,34 +252,13 @@ def create_app(
                 status_code=400,
             )
 
+        except NoProviderAvailableError as e:
+            return await _no_provider_response(
+                e, store, virtual_model, body, start_time
+            )
+
         except AllProvidersFailedError as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            failover = [
-                {
-                    "provider": err["provider"],
-                    "model": err["model"],
-                    "error": err["error"],
-                }
-                for err in e.errors
-            ]
-            await store.record(
-                virtual_model=virtual_model,
-                status="error",
-                error_type="all_providers_failed",
-                error_message=str(e),
-                latency_ms=latency_ms,
-                request_body=body,
-                failover_details=failover,
-            )
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": "api_error",
-                        "message": str(e),
-                    }
-                },
-                status_code=502,
-            )
+            return await _all_failed_response(e, store, virtual_model, body, start_time)
 
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
@@ -288,6 +322,124 @@ def create_app(
             unbind_contextvars("request_id")
 
     return app
+
+
+async def _prefetch_first_chunk(
+    stream_agen: AsyncGenerator[bytes, None],
+    *,
+    timeout: float | None = None,
+) -> tuple[bytes | None, asyncio.Task[bytes] | None]:
+    """有界预取流式首 chunk，超时不取消上游任务.
+
+    ``timeout`` 默认读取模块常量（调用时求值，便于测试 monkeypatch）。
+
+    Returns:
+        ``(first_chunk, pending_task)``：
+        - 超时内完成：``pending_task is None``，``first_chunk`` 可为 ``None``（空流）
+        - 超时：``first_chunk is None``，``pending_task`` 仍在跑，由调用方在响应体中 await
+        - 业务异常（限流/全失败等）：直接向上抛出
+    """
+    wait_for = _STREAM_FIRST_BYTE_PREFETCH_TIMEOUT if timeout is None else timeout
+    task: asyncio.Task[bytes] = asyncio.create_task(anext(stream_agen))
+    done, _pending = await asyncio.wait({task}, timeout=wait_for)
+    if not done:
+        return None, task
+    try:
+        return task.result(), None
+    except StopAsyncIteration:
+        return None, None
+
+
+async def _close_prefetched_stream(
+    stream_agen: AsyncGenerator[bytes, None],
+    pending_first: asyncio.Task[bytes] | None,
+) -> None:
+    """安全关闭预取流：先等 pending task 结束，再 aclose，避免竞态 RuntimeError."""
+    if pending_first is not None and not pending_first.done():
+        pending_first.cancel()
+        try:
+            await pending_first
+        except (asyncio.CancelledError, StopAsyncIteration, Exception):
+            pass
+    await stream_agen.aclose()
+
+
+async def _no_provider_response(
+    e: NoProviderAvailableError,
+    store: CallStore,
+    virtual_model: str,
+    body: dict,
+    start_time: float,
+) -> JSONResponse:
+    latency_ms = int((time.time() - start_time) * 1000)
+    failover = [
+        {
+            "provider": err["provider"],
+            "model": err["model"],
+            "error": err["error"],
+        }
+        for err in e.errors
+    ]
+    status_code = 503 if e.kind == "capacity" else 429
+    error_type = "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
+    await store.record(
+        virtual_model=virtual_model,
+        status="error",
+        error_type=error_type,
+        error_message=str(e),
+        latency_ms=latency_ms,
+        request_body=body,
+        failover_details=failover,
+    )
+    headers = {}
+    if e.retry_after is not None and e.retry_after > 0:
+        headers["Retry-After"] = str(max(1, math.ceil(e.retry_after)))
+    return JSONResponse(
+        {
+            "error": {
+                "type": error_type,
+                "message": str(e),
+            }
+        },
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+async def _all_failed_response(
+    e: AllProvidersFailedError,
+    store: CallStore,
+    virtual_model: str,
+    body: dict,
+    start_time: float,
+) -> JSONResponse:
+    latency_ms = int((time.time() - start_time) * 1000)
+    failover = [
+        {
+            "provider": err["provider"],
+            "model": err["model"],
+            "error": err["error"],
+        }
+        for err in e.errors
+    ]
+    await store.record(
+        virtual_model=virtual_model,
+        status="error",
+        error_type="all_providers_failed",
+        error_message=str(e),
+        latency_ms=latency_ms,
+        request_body=body,
+        failover_details=failover,
+    )
+    return JSONResponse(
+        {
+            "error": {
+                "type": "api_error",
+                "message": str(e),
+            }
+        },
+        status_code=502,
+    )
 
 
 async def _stream_wrapper(
@@ -355,7 +507,7 @@ async def _stream_wrapper(
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         failover = None
-        if isinstance(e, AllProvidersFailedError):
+        if isinstance(e, (AllProvidersFailedError, NoProviderAvailableError)):
             failover = [
                 {
                     "provider": err["provider"],
@@ -373,11 +525,17 @@ async def _stream_wrapper(
             request_body=request_body,
             failover_details=failover,
         )
+        if isinstance(e, NoProviderAvailableError):
+            err_type = (
+                "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
+            )
+        else:
+            err_type = "api_error"
         error_body = json.dumps(
             {
                 "type": "error",
                 "error": {
-                    "type": "api_error",
+                    "type": err_type,
                     "message": str(e),
                 },
             }

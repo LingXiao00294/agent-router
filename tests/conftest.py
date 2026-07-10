@@ -1,9 +1,22 @@
 from __future__ import annotations
 
-import pytest
-import httpx
+from typing import Literal
 
-from agent_router.config import AppConfig, ServerConfig, ProviderConfig
+import httpx
+import pytest
+
+from agent_router.config import (
+    AppConfig,
+    ProviderConfig,
+    ServerConfig,
+    VirtualModelConfig,
+)
+
+
+def _vm(
+    *providers: ProviderConfig, mode: Literal["failover", "sticky"] = "failover"
+) -> VirtualModelConfig:
+    return VirtualModelConfig(mode=mode, providers=list(providers))
 
 
 @pytest.fixture
@@ -11,7 +24,7 @@ def sample_config() -> AppConfig:
     return AppConfig(
         server=ServerConfig(host="127.0.0.1", port=9456),
         models={
-            "haiku-router": [
+            "haiku-router": _vm(
                 ProviderConfig(
                     type="anthropic",
                     name="anthropic",
@@ -28,8 +41,8 @@ def sample_config() -> AppConfig:
                     base_url="https://api.z.ai/api/anthropic",
                     priority=2,
                 ),
-            ],
-            "sonnet-router": [
+            ),
+            "sonnet-router": _vm(
                 ProviderConfig(
                     type="anthropic",
                     name="anthropic",
@@ -38,7 +51,7 @@ def sample_config() -> AppConfig:
                     base_url="https://api.anthropic.com",
                     priority=1,
                 ),
-            ],
+            ),
         },
     )
 

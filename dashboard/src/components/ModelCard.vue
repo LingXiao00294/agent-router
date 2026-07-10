@@ -14,6 +14,15 @@
     </template>
 
     <div class="model-body">
+      <p class="mode-hint">
+        {{
+          pinEnabled
+            ? "全局指定模型模式：使用下方选中的一项，失败时不会转移。"
+            : "全局故障转移模式：按 priority 依次尝试；下方指定开关此时无效。"
+        }}
+      </p>
+      <p v-if="pinnedError" class="refs-error">{{ pinnedError }}</p>
+
       <div class="refs-header">
         <span class="refs-title">Provider 链（按 priority 排序）</span>
         <UiButton size="sm" variant="secondary" @click="$emit('add-ref')">
@@ -34,9 +43,12 @@
         :model-error="modelError(idx)"
         :can-move-up="idx > 0"
         :can-move-down="idx < entry.refs.length - 1"
+        :pin-enabled="pinEnabled"
+        :selected="isPinned(ref)"
         @move-up="$emit('move-ref', idx, idx - 1)"
         @move-down="$emit('move-ref', idx, idx + 1)"
         @remove="$emit('remove-ref', idx)"
+        @select="$emit('pin-ref', idx)"
         @touch-provider="touchProvider(idx)"
         @touch-model="touchModel(idx)"
         @dragstart="onRefDragStart(idx)"
@@ -50,7 +62,7 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import type { ModelEntry } from "../stores/config";
+import type { ModelEntry, ModelRefEntry } from "../stores/config";
 import UiCard from "./ui/UiCard.vue";
 import UiInput from "./ui/UiInput.vue";
 import UiButton from "./ui/UiButton.vue";
@@ -59,8 +71,10 @@ import RefRow from "./RefRow.vue";
 const props = defineProps<{
   entry: ModelEntry;
   providerNames: string[];
+  pinEnabled: boolean;
   nameError?: string;
   refsError?: string;
+  pinnedError?: string;
   providerErrors?: (string | undefined)[];
   modelErrors?: (string | undefined)[];
 }>();
@@ -70,6 +84,7 @@ const emit = defineEmits<{
   "add-ref": [];
   "remove-ref": [idx: number];
   "move-ref": [from: number, to: number];
+  "pin-ref": [idx: number];
   "touch-name": [];
   "touch-provider": [idx: number];
   "touch-model": [idx: number];
@@ -91,8 +106,15 @@ function touchModel(idx: number) {
   emit("touch-model", idx);
 }
 
-// 拖拽排序：RefRow 内部已处理视觉反馈并 emit dragstart/drop，
-// 这里记录被拖源行 index，drop 到目标行时触发 move-ref 重排。
+function isPinned(ref: ModelRefEntry): boolean {
+  return (
+    !!props.entry.pinned_provider &&
+    !!props.entry.pinned_model &&
+    ref.provider === props.entry.pinned_provider &&
+    ref.model === props.entry.pinned_model
+  );
+}
+
 const draggedIdx = ref<number | null>(null);
 
 function onRefDragStart(idx: number) {
@@ -122,6 +144,11 @@ function onRefDrop(idx: number) {
 }
 .model-body {
   padding: var(--space-4);
+}
+.mode-hint {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 .refs-header {
   display: flex;
