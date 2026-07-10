@@ -184,7 +184,10 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function saveConfig(): Promise<boolean> {
-    if (!validate()) return false;
+    if (!validate()) {
+      error.value = "请修正表单中的错误后再保存";
+      return false;
+    }
 
     saving.value = true;
     error.value = null;
@@ -444,6 +447,22 @@ export const useConfigStore = defineStore("config", () => {
     model.pinned_model = ref.model;
   }
 
+  /** sticky 下确保 pin 落在当前 refs；缺失或过期则回退到第一项 */
+  function ensureValidPin(model: ModelEntry) {
+    if (model.refs.length === 0) return;
+    const pinOk =
+      !!model.pinned_provider &&
+      !!model.pinned_model &&
+      model.refs.some(
+        (r) => r.provider === model.pinned_provider && r.model === model.pinned_model
+      );
+    if (!pinOk) {
+      const first = model.refs[0];
+      model.pinned_provider = first?.provider || null;
+      model.pinned_model = first?.model || null;
+    }
+  }
+
   async function setRouterMode(mode: "failover" | "sticky"): Promise<boolean> {
     if (!configReady.value || loading.value) {
       error.value = "配置尚未加载完成，请稍后再试";
@@ -460,11 +479,7 @@ export const useConfigStore = defineStore("config", () => {
     routerConfig.value.mode = mode;
     if (mode === "sticky") {
       for (const m of modelEntries.value) {
-        if (!m.pinned_provider && m.refs.length > 0) {
-          const first = m.refs[0];
-          m.pinned_provider = first.provider || null;
-          m.pinned_model = first.model || null;
-        }
+        ensureValidPin(m);
       }
     }
 
@@ -538,6 +553,7 @@ export const useConfigStore = defineStore("config", () => {
     addRef,
     removeRef,
     pinRef,
+    ensureValidPin,
     setRouterMode,
     moveRef,
     recomputePriorities,

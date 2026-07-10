@@ -130,6 +130,10 @@ def _write_toml(config_path: str, data: dict) -> None:
             # 意外结构：跳过
             continue
 
+        # 空 provider 链不写裸 [models.x]，否则热重载会因空模型失败
+        if not refs:
+            continue
+
         lines.append(f"[models.{key}]")
         if pinned_provider:
             lines.append(f"pinned_provider = {_toml_value(pinned_provider)}")

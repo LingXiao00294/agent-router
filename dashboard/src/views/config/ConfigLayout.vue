@@ -58,6 +58,8 @@ async function save() {
     const ok = await configStore.saveConfig();
     if (ok) {
       toast.success("配置已保存并热重载");
+    } else {
+      toast.error(configStore.error || "请修正表单中的错误后再保存");
     }
   } catch {
     toast.error(configStore.error || "保存失败");

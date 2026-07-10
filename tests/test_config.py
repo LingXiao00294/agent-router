@@ -812,3 +812,43 @@ priority = 1
                 assert new_config.router.recovery_timeout == 120.0
         finally:
             path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_put_config_skips_empty_model_tables(self, store):
+        """空 providers 的模型不应写出裸 [models.x]，以免热重载失败."""
+        path = _write_toml(_TOML_TEMPLATE.format(model_name="keep-me"))
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                body = {
+                    "server": {"host": "127.0.0.1", "port": 9456},
+                    "providers": {
+                        "p1": {
+                            "type": "anthropic",
+                            "api_key": "sk-test",
+                            "base_url": "https://api.anthropic.com",
+                        },
+                    },
+                    "models": {
+                        "keep-me": [
+                            {"provider": "p1", "model": "keep-me", "priority": 1},
+                        ],
+                        "gone": {"providers": []},
+                        "also-gone": [],
+                    },
+                }
+                resp = await ac.put("/api/config", json=body)
+                assert resp.status_code == 200
+
+                written = path.read_text()
+                assert "[models.gone]" not in written
+                assert "[models.also-gone]" not in written
+                assert "[models.keep-me]" in written
+
+                models = (await ac.get("/v1/models")).json()["data"]
+                ids = {m["id"] for m in models}
+                assert ids == {"keep-me"}
+        finally:
+            path.unlink(missing_ok=True)

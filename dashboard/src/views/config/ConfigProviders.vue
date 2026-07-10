@@ -18,9 +18,14 @@
       :entry="p"
       :name-error="configStore.fieldError(`providers[${idx}].name`)"
       :timeout-error="configStore.fieldError(`providers[${idx}].timeout_seconds`)"
+      :max-concurrent-error="configStore.fieldError(`providers[${idx}].max_concurrent`)"
+      :max-queue-error="configStore.fieldError(`providers[${idx}].max_queue`)"
+      :queue-wait-timeout-error="configStore.fieldError(`providers[${idx}].queue_wait_timeout`)"
+      :rate-limit-cooldown-error="configStore.fieldError(`providers[${idx}].rate_limit_cooldown`)"
       @remove="confirmRemoveProvider(idx)"
       @touch-name="touch(`providers[${idx}].name`)"
       @touch-timeout="touch(`providers[${idx}].timeout_seconds`)"
+      @touch-limits="touch(`providers[${idx}].limits`)"
     />
   </ConfigSection>
 </template>
