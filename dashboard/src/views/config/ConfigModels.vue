@@ -92,6 +92,7 @@ function isPinned(model: string, idx: number) {
       <div v-for="(row, idx) in m.providers" :key="idx" class="ref-row">
         <span class="prio mono">#{{ idx + 1 }}</span>
         <select v-model="row.provider">
+          <option disabled value="">选择 provider</option>
           <option v-for="pn in providerNames" :key="pn" :value="pn">{{ pn }}</option>
         </select>
         <input v-model="row.model" placeholder="上游模型名" />
@@ -110,6 +111,12 @@ function isPinned(model: string, idx: number) {
           </button>
           <button class="btn btn-sm btn-danger" type="button" @click="removeRef(name, idx)">×</button>
         </div>
+        <p v-if="fieldErrors[`models.${name}.ref.${idx}`]" class="err ref-err">
+          {{ fieldErrors[`models.${name}.ref.${idx}`] }}
+        </p>
+        <p v-if="fieldErrors[`models.${name}.ref.${idx}.model`]" class="err ref-err">
+          {{ fieldErrors[`models.${name}.ref.${idx}.model`] }}
+        </p>
       </div>
 
       <div class="card-foot">
@@ -151,6 +158,10 @@ function isPinned(model: string, idx: number) {
   gap: 0.5rem;
   align-items: center;
   margin-bottom: 0.5rem;
+}
+.ref-err {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 .ref-row select,
 .ref-row input {

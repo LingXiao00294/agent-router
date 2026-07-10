@@ -10,6 +10,7 @@ import {
   formatTime,
   formatTokens,
   formatUsd,
+  parsePositiveInt,
 } from "@/utils/format";
 
 const store = useCallsStore();
@@ -18,29 +19,37 @@ const router = useRouter();
 const { page, loading, error, detail } = storeToRefs(store);
 
 const filters = computed(() => ({
-  page: Number(route.query.page || 1),
-  size: Number(route.query.size || 50),
+  page: parsePositiveInt(route.query.page, 1),
+  size: parsePositiveInt(route.query.size, 50, 200),
   model: typeof route.query.model === "string" ? route.query.model : "",
   status: typeof route.query.status === "string" ? route.query.status : "",
 }));
 
 async function load(silent = false) {
+  const pageNum = filters.value.page;
+  const sizeNum = filters.value.size;
+  // Normalize invalid query strings (e.g. page=abc) back into the URL.
+  const rawPage = route.query.page;
+  const rawSize = route.query.size;
+  if (
+    (rawPage != null && String(rawPage) !== String(pageNum)) ||
+    (rawSize != null && String(rawSize) !== String(sizeNum))
+  ) {
+    updateQuery({ page: pageNum, size: sizeNum });
+    return;
+  }
+
   await store.fetchList(
     {
-      page: filters.value.page,
-      size: filters.value.size,
+      page: pageNum,
+      size: sizeNum,
       model: filters.value.model || undefined,
       status: filters.value.status || undefined,
     },
     silent,
   );
   const p = store.page;
-  if (
-    p &&
-    p.total > 0 &&
-    p.data.length === 0 &&
-    p.page > p.pages
-  ) {
+  if (p && p.total > 0 && p.data.length === 0 && p.page > p.pages) {
     updateQuery({ page: Math.max(1, p.pages) });
   }
 }
@@ -56,21 +65,16 @@ function updateQuery(patch: Record<string, string | number | undefined>) {
 
 function openDetail(id: string) {
   updateQuery({ id });
-  void store.fetchDetail(id);
 }
 
 function closeDetail() {
   const q = { ...route.query };
   delete q.id;
   void router.replace({ query: q });
-  store.clearDetail();
 }
 
-onMounted(async () => {
-  await load();
-  if (typeof route.query.id === "string") {
-    await store.fetchDetail(route.query.id);
-  }
+onMounted(() => {
+  void load();
 });
 
 watch(
@@ -86,6 +90,7 @@ watch(
     if (typeof id === "string") void store.fetchDetail(id);
     else store.clearDetail();
   },
+  { immediate: true },
 );
 
 const emptyKind = computed(() => {

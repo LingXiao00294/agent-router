@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
+import { useOverlayChrome } from "@/composables/useOverlayChrome";
 import type { ProviderConfig, ProviderType } from "@/api/types";
 import { isBlankOrPlaceholderKey } from "@/utils/configPayload";
 
@@ -11,6 +12,7 @@ const confirm = useConfirm();
 const { draft, fieldErrors } = storeToRefs(store);
 const newName = ref("");
 const editing = ref<string | null>(null);
+const modalRef = ref<HTMLElement | null>(null);
 
 const providerEntries = computed(() => {
   if (!draft.value) return [] as { name: string; p: ProviderConfig }[];
@@ -21,6 +23,9 @@ const editingProvider = computed(() => {
   if (!editing.value || !draft.value) return null;
   return draft.value.providers[editing.value] ?? null;
 });
+
+const modalOpen = computed(() => Boolean(editing.value && editingProvider.value));
+useOverlayChrome(modalOpen, modalRef);
 
 function add() {
   const name = newName.value.trim();
@@ -78,15 +83,15 @@ function keyOk(p: ProviderConfig) {
   return p.has_key || !isBlankOrPlaceholderKey(p.api_key);
 }
 
-function onKey(e: KeyboardEvent) {
+function onModalKey(e: KeyboardEvent) {
   if (e.key === "Escape" && editing.value) {
     e.preventDefault();
     closeEdit();
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onKey));
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onMounted(() => window.addEventListener("keydown", onModalKey));
+onUnmounted(() => window.removeEventListener("keydown", onModalKey));
 </script>
 
 <template>
@@ -135,7 +140,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         class="overlay"
         @click.self="closeEdit"
       >
-        <div class="modal panel" role="dialog" aria-modal="true" :aria-label="`编辑 ${editing}`">
+        <div
+          ref="modalRef"
+          class="modal panel"
+          role="dialog"
+          aria-modal="true"
+          tabindex="-1"
+          :aria-label="`编辑 ${editing}`"
+        >
           <header class="modal-head">
             <div>
               <h3>编辑 Provider</h3>

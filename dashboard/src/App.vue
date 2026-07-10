@@ -12,9 +12,10 @@ import { useMetricsStore } from "@/stores/metrics";
 import { useCallsStore } from "@/stores/calls";
 import { useConfigStore } from "@/stores/config";
 import { useRefreshStore } from "@/stores/refresh";
+import { parsePositiveInt } from "@/utils/format";
 
 const toast = provideToast();
-provideConfirm();
+const confirmApi = provideConfirm();
 
 const app = useAppStore();
 const metrics = useMetricsStore();
@@ -36,36 +37,43 @@ async function bootstrap() {
 
 async function silentRefresh() {
   let failed = false;
+  const name = route.name;
+
   try {
-    await Promise.all([
-      app.checkHealth(),
-      app.loadCircuit(true),
-    ]);
+    await Promise.all([app.checkHealth(), app.loadCircuit(true)]);
   } catch {
     failed = true;
   }
+
   try {
-    if (route.name === "overview") {
+    if (name === "overview") {
       await metrics.refresh(true);
-    } else if (route.name === "calls") {
+      if (metrics.error) failed = true;
+    } else if (name === "calls") {
       const q = route.query;
       await calls.fetchList(
         {
-          page: Number(q.page || 1),
-          size: Number(q.size || 50),
+          page: parsePositiveInt(q.page, 1),
+          size: parsePositiveInt(q.size, 50, 200),
           model: typeof q.model === "string" ? q.model : undefined,
           status: typeof q.status === "string" ? q.status : undefined,
         },
         true,
       );
+      if (calls.error) failed = true;
+    } else if (
+      typeof name === "string" &&
+      name.startsWith("config") &&
+      !config.dirty
+    ) {
+      await config.load();
+      await app.loadConfig(true);
     }
   } catch {
     failed = true;
   }
 
-  if (metrics.error || calls.error || app.healthy === false) {
-    failed = true;
-  }
+  if (app.healthy === false) failed = true;
 
   if (failed) {
     if (!app.staleData) {
@@ -84,7 +92,9 @@ watch(tick, () => {
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName;
   const typing =
-    tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
     (e.target as HTMLElement)?.isContentEditable;
 
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -122,7 +132,12 @@ router.beforeEach(async (to, from) => {
     !to.path.startsWith("/config") &&
     config.dirty
   ) {
-    const ok = window.confirm("配置有未保存更改，确定离开？");
+    const ok = await confirmApi.confirm({
+      title: "放弃未保存更改？",
+      message: "配置有未保存更改，确定离开？",
+      confirmText: "离开",
+      danger: true,
+    });
     if (!ok) return false;
   }
   return true;

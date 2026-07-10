@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import * as api from "@/api";
 import { useAppStore } from "@/stores/app";
@@ -8,16 +8,31 @@ import { useToast } from "@/composables/useToast";
 const app = useAppStore();
 const toast = useToast();
 const { circuit } = storeToRefs(app);
+const loadError = ref<string | null>(null);
+const loading = ref(false);
+
+async function refresh() {
+  loading.value = true;
+  loadError.value = null;
+  try {
+    await app.loadCircuit();
+  } catch (err) {
+    loadError.value =
+      err instanceof Error ? err.message : "加载熔断状态失败";
+  } finally {
+    loading.value = false;
+  }
+}
 
 onMounted(() => {
-  void app.loadCircuit();
+  void refresh();
 });
 
 async function reset(name: string) {
   try {
     await api.resetCircuitBreaker(name);
     toast.success(`已重置 ${name}`);
-    await app.loadCircuit();
+    await refresh();
   } catch (err) {
     toast.error(err instanceof Error ? err.message : "重置失败");
   }
@@ -34,9 +49,17 @@ function badgeClass(state: string) {
   <section class="panel">
     <header class="head">
       <h2 class="panel-title">Circuit Breaker</h2>
-      <button class="btn btn-sm" type="button" @click="app.loadCircuit()">刷新</button>
+      <button class="btn btn-sm" type="button" :disabled="loading" @click="refresh">
+        {{ loading ? "加载中…" : "刷新" }}
+      </button>
     </header>
-    <div v-if="!Object.keys(circuit).length" class="empty-state">暂无 provider 熔断状态</div>
+    <div v-if="loadError" class="error-state">{{ loadError }}</div>
+    <div v-else-if="loading && !Object.keys(circuit).length" class="empty-state">
+      加载中…
+    </div>
+    <div v-else-if="!Object.keys(circuit).length" class="empty-state">
+      暂无 provider 熔断状态
+    </div>
     <div v-else class="table-wrap">
       <table class="data">
         <thead>

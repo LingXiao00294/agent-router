@@ -4,6 +4,7 @@ import { useLocalStorage } from "@vueuse/core";
 import * as api from "@/api";
 import type { AppConfig, CircuitBreakerMap, RouterMode } from "@/api/types";
 import { useConfigStore } from "@/stores/config";
+import { normalizeAppConfig } from "@/utils/configPayload";
 
 export type ThemeMode = "light" | "dark";
 
@@ -48,7 +49,7 @@ export const useAppStore = defineStore("app", () => {
     if (!silent) configLoading.value = true;
     configError.value = null;
     try {
-      config.value = await api.getConfig();
+      config.value = normalizeAppConfig(await api.getConfig());
     } catch (err) {
       configError.value = err instanceof Error ? err.message : "加载配置失败";
       if (!silent) throw err;

@@ -1,13 +1,24 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { useConfirm } from "@/composables/useConfirm";
+import { useOverlayChrome } from "@/composables/useOverlayChrome";
 
 const { state, answer } = useConfirm();
+const dialogRef = ref<HTMLElement | null>(null);
+const open = computed(() => Boolean(state.value));
+useOverlayChrome(open, dialogRef);
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="state" class="overlay" @click.self="answer(false)">
-      <div class="dialog panel" role="alertdialog" aria-modal="true">
+      <div
+        ref="dialogRef"
+        class="dialog panel"
+        role="alertdialog"
+        aria-modal="true"
+        tabindex="-1"
+      >
         <h3>{{ state.title }}</h3>
         <p>{{ state.message }}</p>
         <div class="actions">

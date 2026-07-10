@@ -84,3 +84,15 @@ export function prettyJson(raw: string | null, maxLen = 80_000): string {
     return raw.length > maxLen ? `${raw.slice(0, maxLen)}\n… (truncated)` : raw;
   }
 }
+
+/** Parse a positive int from query/input; fallback when invalid. */
+export function parsePositiveInt(
+  raw: unknown,
+  fallback: number,
+  max?: number,
+): number {
+  const n = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  const i = Math.floor(n);
+  return max != null ? Math.min(i, max) : i;
+}

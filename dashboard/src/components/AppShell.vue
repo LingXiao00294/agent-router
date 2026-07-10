@@ -15,7 +15,7 @@ const refresh = useRefreshStore();
 const toast = useToast();
 const route = useRoute();
 const { healthy, mode, savingMode, config, staleData } = storeToRefs(app);
-const { dirty } = storeToRefs(configStore);
+const { dirty, draft } = storeToRefs(configStore);
 const { interval } = storeToRefs(refresh);
 
 const nav = [
@@ -37,6 +37,12 @@ const healthLabel = computed(() => {
 const modeDisabled = computed(
   () => !config.value || savingMode.value || dirty.value,
 );
+
+/** When Config has unsaved edits, show draft mode so the two controls don't disagree. */
+const displayMode = computed(() => {
+  if (dirty.value && draft.value) return draft.value.router.mode;
+  return mode.value;
+});
 
 async function onModeChange(e: Event) {
   const next = (e.target as HTMLSelectElement).value as RouterMode;
@@ -94,14 +100,15 @@ function onInterval(e: Event) {
             <span class="ctrl-label">Mode</span>
             <select
               class="ctrl-select"
-              :value="mode"
+              :value="displayMode"
               :disabled="modeDisabled"
-              :title="dirty ? '配置页有未保存更改' : undefined"
+              :title="dirty ? '配置页有未保存更改，请先保存或重载' : undefined"
               @change="onModeChange"
             >
               <option value="failover">Failover</option>
               <option value="sticky">Sticky</option>
             </select>
+            <span v-if="dirty" class="badge badge-warn mode-hint">未保存</span>
           </label>
           <label class="ctrl">
             <span class="ctrl-label">Refresh</span>
@@ -236,6 +243,10 @@ function onInterval(e: Event) {
 
 .stale-badge {
   font-size: 0.72rem;
+}
+
+.mode-hint {
+  font-size: 0.7rem;
 }
 
 .health {

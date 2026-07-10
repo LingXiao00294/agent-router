@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { CallRecord } from "@/api/types";
 import {
   formatLatency,
@@ -9,6 +9,7 @@ import {
   parseFailover,
   prettyJson,
 } from "@/utils/format";
+import { useOverlayChrome } from "@/composables/useOverlayChrome";
 
 const props = defineProps<{
   record: CallRecord | null;
@@ -16,15 +17,35 @@ const props = defineProps<{
   error: string | null;
 }>();
 
-defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: [] }>();
+
+const drawerRef = ref<HTMLElement | null>(null);
+const overlayActive = ref(true);
+useOverlayChrome(overlayActive, drawerRef);
 
 const failover = computed(() => parseFailover(props.record?.failover_details ?? null));
+
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    emit("close");
+  }
+}
+
+onMounted(() => window.addEventListener("keydown", onKey));
+onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
   <Teleport to="body">
     <div class="overlay" @click.self="$emit('close')">
-      <aside class="drawer" role="dialog" aria-modal="true">
+      <aside
+        ref="drawerRef"
+        class="drawer"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+      >
         <header class="drawer-head">
           <div>
             <h2>调用详情</h2>

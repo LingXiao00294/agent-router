@@ -11,7 +11,9 @@ import {
   captureMaskedApiKeys,
   emptyRouter,
   emptyServer,
+  isBackendMaskedShape,
   isBlankOrPlaceholderKey,
+  normalizeAppConfig,
   normalizeModels,
 } from "@/utils/configPayload";
 
@@ -55,10 +57,11 @@ export const useConfigStore = defineStore("config", () => {
         api.getConfig(),
         api.getConfigModels(),
       ]);
-      draft.value = cloneConfig(cfg);
-      models.value = normalizeModels(cfg.models, normModels);
-      knownProviders.value = new Set(Object.keys(cfg.providers));
-      maskedApiKeys.value = captureMaskedApiKeys(cfg.providers);
+      const normalized = normalizeAppConfig(cfg);
+      draft.value = cloneConfig(normalized);
+      models.value = normalizeModels(normalized.models, normModels);
+      knownProviders.value = new Set(Object.keys(normalized.providers));
+      maskedApiKeys.value = captureMaskedApiKeys(normalized.providers);
       baseline.value = JSON.stringify(buildPayload());
       fieldErrors.value = {};
     } catch (err) {
@@ -130,9 +133,9 @@ export const useConfigStore = defineStore("config", () => {
       }
       if (
         p.failure_threshold != null &&
-        !Number.isFinite(p.failure_threshold)
+        (!Number.isFinite(p.failure_threshold) || p.failure_threshold < 0)
       ) {
-        errs[`providers.${name}.failure_threshold`] = "需为数字或留空";
+        errs[`providers.${name}.failure_threshold`] = "需 ≥ 0 或留空";
       }
       if (
         p.recovery_timeout != null &&
@@ -140,11 +143,17 @@ export const useConfigStore = defineStore("config", () => {
       ) {
         errs[`providers.${name}.recovery_timeout`] = "需 > 0 或留空";
       }
-      if (
-        !knownProviders.value.has(name) &&
-        isBlankOrPlaceholderKey(p.api_key)
+      if (!knownProviders.value.has(name)) {
+        if (isBackendMaskedShape(p.api_key)) {
+          errs[`providers.${name}.api_key`] = "新建 provider 需要有效 api_key";
+        }
+      } else if (
+        isBackendMaskedShape(p.api_key) &&
+        !isBlankOrPlaceholderKey(p.api_key) &&
+        p.api_key !== maskedApiKeys.value[name]
       ) {
-        errs[`providers.${name}.api_key`] = "新建 provider 需要有效 api_key";
+        errs[`providers.${name}.api_key`] =
+          "不能使用脱敏形态的密钥；请输入完整 api_key 或留空保留";
       }
     }
 
@@ -152,6 +161,14 @@ export const useConfigStore = defineStore("config", () => {
       if (!m.providers.length) {
         errs[`models.${name}`] = "至少一条 provider 引用";
       }
+      m.providers.forEach((r, i) => {
+        if (!r.provider?.trim() || !(r.provider in draft.value!.providers)) {
+          errs[`models.${name}.ref.${i}`] = "provider 无效或不存在";
+        }
+        if (!r.model?.trim()) {
+          errs[`models.${name}.ref.${i}.model`] = "model 不能为空";
+        }
+      });
       if (draft.value.router.mode === "sticky") {
         const ok =
           m.pinned_provider &&
@@ -210,10 +227,25 @@ export const useConfigStore = defineStore("config", () => {
       router: { ...draft.value.router, mode: next },
     };
     try {
+      if (!validate()) {
+        draft.value = {
+          ...draft.value,
+          router: { ...draft.value.router, mode: prev },
+        };
+        const pinErr = Object.entries(fieldErrors.value).find(([k]) =>
+          k.endsWith(".pin"),
+        );
+        throw new Error(
+          pinErr?.[1] ??
+            (next === "sticky"
+              ? "无法切换为 sticky：请先为所有虚拟模型设置有效 pin"
+              : "配置校验失败，无法切换 Mode"),
+        );
+      }
       await api.putConfig(buildPayload());
       await load();
     } catch (err) {
-      if (draft.value) {
+      if (draft.value && draft.value.router.mode === next) {
         draft.value = {
           ...draft.value,
           router: { ...draft.value.router, mode: prev },

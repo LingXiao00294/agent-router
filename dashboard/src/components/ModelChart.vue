@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { BarChart } from "echarts/charts";
 import {
@@ -19,6 +19,10 @@ const app = useAppStore();
 
 function render() {
   if (!el.value) return;
+  if (!props.data.length) {
+    chart?.clear();
+    return;
+  }
   if (!chart) chart = echarts.init(el.value);
   const styles = getComputedStyle(document.documentElement);
   const text = styles.getPropertyValue("--chart-axis").trim();
@@ -53,6 +57,7 @@ function render() {
       },
     ],
   });
+  chart.resize();
 }
 
 function onResize() {
@@ -70,22 +75,57 @@ onBeforeUnmount(() => {
   chart = null;
 });
 
-watch(() => props.data, render, { deep: true });
-watch(() => app.theme, () => {
-  chart?.dispose();
-  chart = null;
-  render();
-});
+watch(
+  () => props.data,
+  async () => {
+    await nextTick();
+    render();
+  },
+  { deep: true, flush: "post" },
+);
+
+watch(
+  () => app.theme,
+  async () => {
+    chart?.dispose();
+    chart = null;
+    await nextTick();
+    render();
+  },
+);
 </script>
 
 <template>
-  <div v-if="!data.length" class="empty-state">暂无真实模型数据</div>
-  <div v-else ref="el" class="chart" />
+  <div class="wrap">
+    <div v-show="!data.length" class="empty-state">暂无真实模型数据</div>
+    <div
+      ref="el"
+      class="chart"
+      :class="{ 'is-empty': !data.length }"
+      :aria-hidden="!data.length"
+    />
+  </div>
 </template>
 
 <style scoped>
+.wrap {
+  position: relative;
+  min-height: 260px;
+}
 .chart {
   width: 100%;
   height: 260px;
+}
+.chart.is-empty {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
 }
 </style>
