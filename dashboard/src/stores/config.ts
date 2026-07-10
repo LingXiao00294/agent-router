@@ -31,6 +31,7 @@ export const useConfigStore = defineStore("config", () => {
   const saving = ref(false);
   const error = ref<string | null>(null);
   const fieldErrors = ref<Record<string, string>>({});
+  let loadPromise: Promise<void> | null = null;
 
   const dirty = computed(() => {
     if (!draft.value) return false;
@@ -49,27 +50,42 @@ export const useConfigStore = defineStore("config", () => {
     return buildPutPayload(draft.value, models.value, maskedApiKeys.value);
   }
 
-  async function load() {
-    loading.value = true;
-    error.value = null;
-    try {
-      const [cfg, normModels] = await Promise.all([
-        api.getConfig(),
-        api.getConfigModels(),
-      ]);
-      const normalized = normalizeAppConfig(cfg);
-      draft.value = cloneConfig(normalized);
-      models.value = normalizeModels(normalized.models, normModels);
-      knownProviders.value = new Set(Object.keys(normalized.providers));
-      maskedApiKeys.value = captureMaskedApiKeys(normalized.providers);
-      baseline.value = JSON.stringify(buildPayload());
-      fieldErrors.value = {};
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "加载配置失败";
-      throw err;
-    } finally {
-      loading.value = false;
-    }
+  /** Reuse the active request so callers always initialize one consistent draft. */
+  function load(): Promise<void> {
+    if (loadPromise) return loadPromise;
+
+    const request = (async () => {
+      loading.value = true;
+      error.value = null;
+      try {
+        const [cfg, normModels] = await Promise.all([
+          api.getConfig(),
+          api.getConfigModels(),
+        ]);
+        const normalized = normalizeAppConfig(cfg);
+        draft.value = cloneConfig(normalized);
+        models.value = normalizeModels(normalized.models, normModels);
+        knownProviders.value = new Set(Object.keys(normalized.providers));
+        maskedApiKeys.value = captureMaskedApiKeys(normalized.providers);
+        baseline.value = JSON.stringify(buildPayload());
+        fieldErrors.value = {};
+      } catch (err) {
+        error.value = err instanceof Error ? err.message : "加载配置失败";
+        throw err;
+      } finally {
+        loading.value = false;
+      }
+    })();
+    loadPromise = request;
+    void request.then(
+      () => {
+        if (loadPromise === request) loadPromise = null;
+      },
+      () => {
+        if (loadPromise === request) loadPromise = null;
+      },
+    );
+    return request;
   }
 
   function validate(): boolean {
@@ -100,6 +116,13 @@ export const useConfigStore = defineStore("config", () => {
       draft.value.router.recovery_timeout <= 0
     ) {
       errs["router.recovery_timeout"] = "需 > 0";
+    }
+
+    if (!Object.keys(draft.value.providers).length) {
+      errs.providers = "至少保留一个 provider";
+    }
+    if (!Object.keys(models.value).length) {
+      errs.models = "至少保留一个虚拟模型";
     }
 
     for (const [name, p] of Object.entries(draft.value.providers)) {
@@ -232,14 +255,13 @@ export const useConfigStore = defineStore("config", () => {
           ...draft.value,
           router: { ...draft.value.router, mode: prev },
         };
-        const pinErr = Object.entries(fieldErrors.value).find(([k]) =>
-          k.endsWith(".pin"),
-        );
+        const firstError =
+          Object.entries(fieldErrors.value).find(([key]) => key.endsWith(".pin")) ??
+          Object.entries(fieldErrors.value)[0];
         throw new Error(
-          pinErr?.[1] ??
-            (next === "sticky"
-              ? "无法切换为 sticky：请先为所有虚拟模型设置有效 pin"
-              : "配置校验失败，无法切换 Mode"),
+          firstError
+            ? `无法切换 Mode：请先修正「${firstError[0]}」：${firstError[1]}`
+            : "配置校验失败，无法切换 Mode",
         );
       }
       await api.putConfig(buildPayload());
@@ -264,6 +286,9 @@ export const useConfigStore = defineStore("config", () => {
       fieldErrors.value = { ...fieldErrors.value, providers: "名称已存在" };
       return;
     }
+    const { providers: _nameError, ...remainingErrors } = fieldErrors.value;
+    void _nameError;
+    fieldErrors.value = remainingErrors;
     draft.value.providers[name] = {
       type: "anthropic",
       api_key: "",

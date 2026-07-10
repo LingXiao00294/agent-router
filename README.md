@@ -160,6 +160,7 @@ bun run build     # 生产构建 → dashboard/dist/
 ```
 
 构建后通过 `uv run agent-router dashboard` 启动独立面板，访问 `http://127.0.0.1:5173`。
+为防止误清空上游，Dashboard 保存配置时要求至少保留一个 provider 和一个虚拟模型；该限制不改变配置 API 或 TOML 格式。
 
 ## 开发
 

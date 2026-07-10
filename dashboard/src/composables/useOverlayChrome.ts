@@ -6,6 +6,10 @@ import {
   toValue,
 } from "vue";
 
+const overlayStack: symbol[] = [];
+let bodyLockCount = 0;
+let savedBodyOverflow = "";
+
 /**
  * Lock body scroll and trap Tab focus inside `root` while `active` is true.
  * Restores previously focused element on release.
@@ -14,9 +18,9 @@ export function useOverlayChrome(
   active: MaybeRefOrGetter<boolean>,
   root: Ref<HTMLElement | null>,
 ) {
-  let previousOverflow = "";
   let previousFocus: HTMLElement | null = null;
   let locked = false;
+  const overlayId = Symbol("overlay");
 
   function focusables(el: HTMLElement): HTMLElement[] {
     return [
@@ -27,7 +31,7 @@ export function useOverlayChrome(
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "Tab" || !root.value) return;
+    if (e.key !== "Tab" || !root.value || overlayStack.at(-1) !== overlayId) return;
     const nodes = focusables(root.value);
     if (!nodes.length) return;
     const first = nodes[0];
@@ -47,9 +51,13 @@ export function useOverlayChrome(
   function lock() {
     if (locked) return;
     locked = true;
-    previousOverflow = document.body.style.overflow;
     previousFocus = document.activeElement as HTMLElement | null;
-    document.body.style.overflow = "hidden";
+    overlayStack.push(overlayId);
+    if (bodyLockCount === 0) {
+      savedBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    bodyLockCount += 1;
     window.addEventListener("keydown", onKeydown);
     requestAnimationFrame(() => {
       const el = root.value;
@@ -62,9 +70,16 @@ export function useOverlayChrome(
   function unlock() {
     if (!locked) return;
     locked = false;
+    const wasTopOverlay = overlayStack.at(-1) === overlayId;
+    const index = overlayStack.lastIndexOf(overlayId);
+    if (index !== -1) overlayStack.splice(index, 1);
     window.removeEventListener("keydown", onKeydown);
-    document.body.style.overflow = previousOverflow;
-    previousFocus?.focus?.();
+    bodyLockCount = Math.max(0, bodyLockCount - 1);
+    if (bodyLockCount === 0) {
+      document.body.style.overflow = savedBodyOverflow;
+      savedBodyOverflow = "";
+    }
+    if (wasTopOverlay) previousFocus?.focus?.();
     previousFocus = null;
   }
 

@@ -15,7 +15,7 @@ const refresh = useRefreshStore();
 const toast = useToast();
 const route = useRoute();
 const { healthy, mode, savingMode, config, staleData } = storeToRefs(app);
-const { dirty, draft } = storeToRefs(configStore);
+const { dirty, draft, loading: configLoading } = storeToRefs(configStore);
 const { interval } = storeToRefs(refresh);
 
 const nav = [
@@ -35,7 +35,7 @@ const healthLabel = computed(() => {
 });
 
 const modeDisabled = computed(
-  () => !config.value || savingMode.value || dirty.value,
+  () => !config.value || savingMode.value || configLoading.value || dirty.value,
 );
 
 /** When Config has unsaved edits, show draft mode so the two controls don't disagree. */
@@ -102,7 +102,7 @@ function onInterval(e: Event) {
               class="ctrl-select"
               :value="displayMode"
               :disabled="modeDisabled"
-              :title="dirty ? '配置页有未保存更改，请先保存或重载' : undefined"
+              :title="dirty ? '配置页有未保存更改，请先保存或重载' : configLoading ? '配置加载中' : undefined"
               @change="onModeChange"
             >
               <option value="failover">Failover</option>

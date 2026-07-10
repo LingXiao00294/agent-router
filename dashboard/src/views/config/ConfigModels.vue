@@ -72,6 +72,7 @@ function isPinned(model: string, idx: number) {
       </div>
       <button class="btn btn-primary" type="button" @click="add">添加</button>
     </div>
+    <p v-if="fieldErrors.models" class="err">{{ fieldErrors.models }}</p>
 
     <article v-for="(m, name) in models" :key="name" class="panel card">
       <header class="card-head">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
@@ -26,6 +26,15 @@ const editingProvider = computed(() => {
 
 const modalOpen = computed(() => Boolean(editing.value && editingProvider.value));
 useOverlayChrome(modalOpen, modalRef);
+
+watch(newName, (value) => {
+  if (fieldErrors.value.providers !== "名称已存在") return;
+  const name = value.trim();
+  if (name && draft.value?.providers[name]) return;
+  const { providers: _nameError, ...remainingErrors } = fieldErrors.value;
+  void _nameError;
+  fieldErrors.value = remainingErrors;
+});
 
 function add() {
   const name = newName.value.trim();
