@@ -10,16 +10,9 @@ const { draft, fieldErrors } = storeToRefs(store);
   <section v-if="draft" class="panel form">
     <h2 class="panel-title">Router</h2>
     <p class="muted note">
-      页内改 mode 仅标记 dirty，需点保存；顶栏 Mode 会立即 PUT。
+      调整故障判定阈值与熔断恢复时间；故障转移可在页面顶栏直接开关。
     </p>
     <div class="grid">
-      <div class="field">
-        <label>mode</label>
-        <select v-model="draft.router.mode">
-          <option value="failover">failover</option>
-          <option value="sticky">sticky</option>
-        </select>
-      </div>
       <div class="field">
         <label>failure_threshold</label>
         <input v-model.number="draft.router.failure_threshold" type="number" min="0" />
@@ -43,7 +36,7 @@ const { draft, fieldErrors } = storeToRefs(store);
 .note { margin: 0.5rem 0 0; font-size: 0.85rem; }
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
   margin-top: 1rem;
 }

@@ -246,10 +246,10 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
-  /** Top-bar immediate mode switch: refuses when config page has unsaved edits. */
+  /** Top-bar failover switch: refuses when config page has unsaved edits. */
   async function setRouterMode(next: RouterMode) {
     if (dirty.value) {
-      throw new Error("配置页有未保存更改，请先保存或刷新后再切换 Mode");
+      throw new Error("配置页有未保存更改，请先保存或刷新后再切换故障转移");
     }
     if (!draft.value) {
       await load();

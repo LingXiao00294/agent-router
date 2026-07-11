@@ -19,7 +19,7 @@ export const useAppStore = defineStore("app", () => {
   const savingMode = ref(false);
   const staleData = ref(false);
 
-  const mode = computed(() => config.value?.router.mode ?? "failover");
+  const mode = computed(() => config.value?.router.mode ?? "sticky");
 
   function applyTheme(next: ThemeMode) {
     theme.value = next;
@@ -71,7 +71,7 @@ export const useAppStore = defineStore("app", () => {
     if (savingMode.value) return;
     const configStore = useConfigStore();
     if (configStore.dirty) {
-      throw new Error("配置页有未保存更改，请先保存或刷新后再切换 Mode");
+      throw new Error("配置页有未保存更改，请先保存或刷新后再切换故障转移");
     }
     const prev = config.value?.router.mode;
     if (prev === next) return;

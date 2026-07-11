@@ -1,28 +1,26 @@
 from __future__ import annotations
 
-from typing import Literal
-
 import httpx
 import pytest
 
 from agent_router.config import (
     AppConfig,
     ProviderConfig,
+    RouterConfig,
     ServerConfig,
     VirtualModelConfig,
 )
 
 
-def _vm(
-    *providers: ProviderConfig, mode: Literal["failover", "sticky"] = "failover"
-) -> VirtualModelConfig:
-    return VirtualModelConfig(mode=mode, providers=list(providers))
+def _vm(*providers: ProviderConfig) -> VirtualModelConfig:
+    return VirtualModelConfig(providers=list(providers))
 
 
 @pytest.fixture
 def sample_config() -> AppConfig:
     return AppConfig(
         server=ServerConfig(host="127.0.0.1", port=9456),
+        router=RouterConfig(mode="failover"),
         models={
             "haiku-router": _vm(
                 ProviderConfig(

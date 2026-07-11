@@ -37,7 +37,7 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 - 旧格式 `[[models.*]]` list 仍可读，写入统一为新格式
 - `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开
 - 虚拟模型 → `VirtualModelConfig`（可选 `pinned_*` + 按 priority 排序的 `providers`）
-- `[router].mode`：`failover`（默认）按 priority 故障转移；`sticky` 时各虚拟模型钉死各自的 `pinned_provider`+`pinned_model`，任何失败都不转移
+- `[router].mode`：`sticky`（默认）时各虚拟模型钉死各自的 `pinned_provider`+`pinned_model`，任何失败都不转移；`failover` 按 priority 故障转移
 - `[router]` 另含全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
 - 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`，以及本地限流：`max_concurrent`（0=不限）、`max_queue`（0=不排）、`queue_wait_timeout`、`rate_limit_cooldown`
 - provider `name` 字段来自 TOML 中的 `[providers.<name>]` 键，无需显式填写
@@ -116,7 +116,7 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 
 - Vue 3 + Vite + TypeScript + ECharts + Vue Router
 - 页面: Dashboard（统计卡片、模型图表、调用表格、趋势图）、Config（配置管理）
-- 仪表盘顶部可切换全局 failover/sticky；虚拟模型页每行常驻指定开关（failover 时无效）；Providers 卡片可配置本地限流字段
+- 仪表盘顶部通过“故障转移”开关切换全局 failover/sticky；虚拟模型缺失 pin 时默认选择第一优先级引用；Providers 卡片可配置本地限流字段
 - 开发时 Vite dev server 将 `/api`、`/health`、`/v1` 代理到后端
 
 ## 测试

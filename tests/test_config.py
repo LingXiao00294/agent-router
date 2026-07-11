@@ -51,6 +51,9 @@ priority = 1
             assert len(config.models["test"].providers) == 1
             assert config.models["test"].providers[0].model == "claude-test"
             assert config.models["test"].providers[0].api_key == "sk-test"
+            assert config.router.mode == "sticky"
+            assert config.models["test"].pinned_provider == "p1"
+            assert config.models["test"].pinned_model == "claude-test"
         finally:
             path.unlink()
 

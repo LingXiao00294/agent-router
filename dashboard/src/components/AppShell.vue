@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useAppStore } from "@/stores/app";
@@ -17,6 +17,7 @@ const route = useRoute();
 const { healthy, mode, savingMode, config, staleData } = storeToRefs(app);
 const { dirty, draft, loading: configLoading } = storeToRefs(configStore);
 const { interval } = storeToRefs(refresh);
+const pendingMode = ref<RouterMode | null>(null);
 
 const nav = [
   { to: "/", label: "Overview", name: "overview" },
@@ -40,17 +41,26 @@ const modeDisabled = computed(
 
 /** When Config has unsaved edits, show draft mode so the two controls don't disagree. */
 const displayMode = computed(() => {
+  if (pendingMode.value) return pendingMode.value;
   if (dirty.value && draft.value) return draft.value.router.mode;
   return mode.value;
 });
 
-async function onModeChange(e: Event) {
-  const next = (e.target as HTMLSelectElement).value as RouterMode;
+const failoverEnabled = computed(() => displayMode.value === "failover");
+
+async function onFailoverChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const next = input.checked ? "failover" : "sticky";
+  pendingMode.value = next;
   try {
     await app.setMode(next);
-    toast.success(`路由模式已切换为 ${next}`);
+    toast.success(input.checked ? "故障转移已开启" : "已切换到指定模型模式");
   } catch (err) {
+    pendingMode.value = null;
+    input.checked = failoverEnabled.value;
     toast.error(err instanceof Error ? err.message : "切换失败");
+  } finally {
+    pendingMode.value = null;
   }
 }
 
@@ -96,19 +106,25 @@ function onInterval(e: Event) {
           <span v-if="staleData" class="stale-badge badge badge-warn">数据可能过期</span>
         </div>
         <div class="top-actions">
-          <label class="ctrl">
-            <span class="ctrl-label">Mode</span>
-            <select
-              class="ctrl-select"
-              :value="displayMode"
+          <label
+            class="ctrl mode-ctrl"
+            :class="{ disabled: modeDisabled }"
+            :title="dirty ? '配置页有未保存更改，请先保存或刷新' : configLoading ? '配置加载中' : undefined"
+          >
+            <span class="ctrl-label">故障转移</span>
+            <input
+              class="sr-only"
+              type="checkbox"
+              role="switch"
+              aria-label="开启或关闭故障转移"
+              :aria-busy="savingMode"
+              :checked="failoverEnabled"
               :disabled="modeDisabled"
-              :title="dirty ? '配置页有未保存更改，请先保存或刷新' : configLoading ? '配置加载中' : undefined"
-              @change="onModeChange"
-            >
-              <option value="failover">Failover</option>
-              <option value="sticky">Sticky</option>
-            </select>
-            <span v-if="dirty" class="badge badge-warn mode-hint">未保存</span>
+              @change="onFailoverChange"
+            />
+            <span class="switch-track" aria-hidden="true">
+              <span class="switch-thumb" />
+            </span>
           </label>
           <label class="ctrl">
             <span class="ctrl-label">Refresh</span>
@@ -245,8 +261,52 @@ function onInterval(e: Event) {
   font-size: 0.72rem;
 }
 
-.mode-hint {
-  font-size: 0.7rem;
+.mode-ctrl {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mode-ctrl.disabled {
+  cursor: not-allowed;
+}
+
+.switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(21, 32, 43, 0.3);
+  transition: transform 0.18s ease;
+}
+
+.mode-ctrl input:checked + .switch-track {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.mode-ctrl input:checked + .switch-track .switch-thumb {
+  transform: translateX(12px);
+}
+
+.mode-ctrl input:focus-visible + .switch-track {
+  box-shadow: var(--focus-ring);
 }
 
 .health {

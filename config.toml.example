@@ -9,7 +9,7 @@ log_backup_count = 5
 [router]
 failure_threshold = 5
 recovery_timeout = 600
-mode = "failover"   # 或 "sticky"（全局指定模型；各虚拟模型需设置 pinned_*）
+mode = "sticky"   # 默认指定模型；改为 "failover" 可开启故障转移
 
 [providers.zai]
 type = "anthropic"
@@ -35,9 +35,8 @@ base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
 timeout_seconds = 120
 
 [models.opus-router]
-# 全局 mode=sticky 时生效：
-# pinned_provider = "mimo token plan"
-# pinned_model = "mimo-v2.5-pro"
+pinned_provider = "mimo token plan"
+pinned_model = "mimo-v2.5-pro"
 
 [[models.opus-router.providers]]
 provider = "mimo token plan"
@@ -55,6 +54,8 @@ model = "glm-5.2"
 priority = 3
 
 [models.sonnet-router]
+pinned_provider = "deepseek"
+pinned_model = "deepseek-v4-flash"
 
 [[models.sonnet-router.providers]]
 provider = "deepseek"
@@ -67,6 +68,8 @@ model = "mimo-v2.5"
 priority = 2
 
 [models.haiku-router]
+pinned_provider = "deepseek"
+pinned_model = "deepseek-v4-flash"
 
 [[models.haiku-router.providers]]
 provider = "deepseek"

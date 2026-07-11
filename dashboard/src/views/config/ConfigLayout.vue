@@ -33,7 +33,7 @@ async function save() {
   try {
     await store.save();
     await app.loadConfig(true);
-    toast.success("已刷新");
+    toast.success("已保存");
   } catch (err) {
     toast.error(err instanceof Error ? err.message : "保存失败");
   }
@@ -66,9 +66,11 @@ async function reload() {
         <h1>Config</h1>
         <p class="muted">编辑 config.toml · Ctrl/Cmd+S 保存</p>
       </div>
-      <div class="actions">
+      <div class="actions floating-actions">
         <span v-if="dirty" class="badge badge-warn">未保存</span>
-        <button class="btn" type="button" :disabled="loading" @click="reload">刷新</button>
+        <button class="btn" type="button" :disabled="loading" title="重新载入配置" @click="reload">
+          刷新
+        </button>
         <button
           class="btn btn-primary"
           type="button"
@@ -105,6 +107,8 @@ async function reload() {
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
+  min-height: 3rem;
+  padding-right: 15rem;
   margin-bottom: 1rem;
 }
 .page-head h1 {
@@ -118,6 +122,18 @@ async function reload() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+.floating-actions {
+  position: fixed;
+  top: calc(var(--header-height) + 0.8rem);
+  right: 1.25rem;
+  z-index: 9;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
 }
 .subnav {
   display: flex;
@@ -137,5 +153,15 @@ async function reload() {
   background: var(--accent-soft);
   border-color: transparent;
   color: var(--accent);
+}
+@media (max-width: 680px) {
+  .page-head {
+    padding-right: 0;
+    padding-top: 3.75rem;
+  }
+  .floating-actions {
+    top: calc(var(--header-height) + 0.5rem);
+    right: 0.75rem;
+  }
 }
 </style>

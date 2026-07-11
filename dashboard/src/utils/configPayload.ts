@@ -24,7 +24,7 @@ export function emptyRouter(): RouterConfig {
   return {
     failure_threshold: 5,
     recovery_timeout: 600,
-    mode: "failover",
+    mode: "sticky",
   };
 }
 
@@ -99,7 +99,7 @@ export function normalizeAppConfig(
   const router: RouterConfig = {
     failure_threshold: asFinite(routerIn.failure_threshold, 5),
     recovery_timeout: asFinite(routerIn.recovery_timeout, 600),
-    mode: routerIn.mode === "sticky" ? "sticky" : "failover",
+    mode: routerIn.mode === "failover" ? "failover" : "sticky",
   };
 
   const providers: Record<string, ProviderConfig> = {};
@@ -166,27 +166,37 @@ export function normalizeModels(
   models: Record<string, VirtualModelConfig | ModelRef[]> | null | undefined,
   normalized?: Record<string, VirtualModelConfig>,
 ): Record<string, VirtualModelConfig> {
-  if (normalized) return structuredClone(normalized);
+  const source = normalized ?? models ?? {};
   const out: Record<string, VirtualModelConfig> = {};
-  for (const [name, entry] of Object.entries(models ?? {})) {
+  for (const [name, entry] of Object.entries(source)) {
+    let providers: ModelRef[];
+    let pinnedProvider: string | null;
+    let pinnedModel: string | null;
     if (Array.isArray(entry)) {
-      out[name] = {
-        pinned_provider: null,
-        pinned_model: null,
-        providers: entry.map((r, i) => ({
-          ...r,
+      providers = entry
+        .map((r, i) => ({
+          ...structuredClone(r),
           priority: r.priority ?? i + 1,
-        })),
-      };
+        }))
+        .sort((a, b) => a.priority - b.priority);
+      pinnedProvider = null;
+      pinnedModel = null;
     } else {
-      out[name] = {
-        pinned_provider: entry.pinned_provider ?? null,
-        pinned_model: entry.pinned_model ?? null,
-        providers: [...(entry.providers ?? [])].sort(
-          (a, b) => a.priority - b.priority,
-        ),
-      };
+      providers = structuredClone(entry.providers ?? []).sort(
+        (a, b) => a.priority - b.priority,
+      );
+      pinnedProvider = entry.pinned_provider ?? null;
+      pinnedModel = entry.pinned_model ?? null;
     }
+    const pinValid = providers.some(
+      (r) => r.provider === pinnedProvider && r.model === pinnedModel,
+    );
+    const defaultPin = providers.find((r) => r.provider.trim() && r.model.trim());
+    out[name] = {
+      pinned_provider: pinValid ? pinnedProvider : (defaultPin?.provider ?? null),
+      pinned_model: pinValid ? pinnedModel : (defaultPin?.model ?? null),
+      providers,
+    };
   }
   return out;
 }
@@ -226,8 +236,11 @@ export function buildPutPayload(
         (r) => r.provider === pinned_provider && r.model === pinned_model,
       );
     if (!pinOk) {
-      pinned_provider = null;
-      pinned_model = null;
+      const defaultPin = providersList.find(
+        (r) => r.provider.trim() && r.model.trim(),
+      );
+      pinned_provider = defaultPin?.provider ?? null;
+      pinned_model = defaultPin?.model ?? null;
     }
     modelOut[name] = {
       pinned_provider,

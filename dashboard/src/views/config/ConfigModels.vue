@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import type { ModelRef } from "@/api/types";
 import { useConfigStore } from "@/stores/config";
@@ -9,7 +9,7 @@ const store = useConfigStore();
 const confirm = useConfirm();
 const { draft, models, fieldErrors } = storeToRefs(store);
 const newName = ref("");
-const sticky = computed(() => draft.value?.router.mode === "sticky");
+const failoverEnabled = computed(() => draft.value?.router.mode === "failover");
 const providerNames = computed(() => Object.keys(draft.value?.providers ?? {}));
 const dragCandidate = ref<{
   model: string;
@@ -38,6 +38,22 @@ const dragPreviewRow = computed(() => {
   const source = draggingRef.value;
   return source ? models.value[source.model]?.providers[source.index] ?? null : null;
 });
+
+watch(
+  models,
+  (current) => {
+    for (const m of Object.values(current)) {
+      const pinValid = m.providers.some(
+        (row) => row.provider === m.pinned_provider && row.model === m.pinned_model,
+      );
+      if (pinValid) continue;
+      const first = m.providers.find((row) => row.provider.trim() && row.model.trim());
+      m.pinned_provider = first?.provider ?? null;
+      m.pinned_model = first?.model ?? null;
+    }
+  },
+  { deep: true, immediate: true },
+);
 
 function add() {
   store.addModel(newName.value.trim());
@@ -259,13 +275,6 @@ function setPin(model: string, idx: number) {
   m.pinned_model = ref.model;
 }
 
-function clearPin(model: string) {
-  const m = models.value[model];
-  if (!m) return;
-  m.pinned_provider = null;
-  m.pinned_model = null;
-}
-
 function isPinned(model: string, idx: number) {
   const m = models.value[model];
   const ref = m?.providers[idx];
@@ -291,8 +300,8 @@ function isPinned(model: string, idx: number) {
           <h3 class="mono">{{ name }}</h3>
           <p class="muted tiny">
             拖动左侧手柄调整链顺序（priority）
-            <template v-if="sticky"> · sticky 需 pin</template>
-            <template v-else> · 可预设切换 sticky 后使用的 pin</template>
+            <template v-if="failoverEnabled"> · 失败时按顺序尝试</template>
+            <template v-else> · 仅调用 Pin 指定的模型</template>
           </p>
           <p v-if="fieldErrors[`models.${name}`]" class="err">{{ fieldErrors[`models.${name}`] }}</p>
           <p v-if="fieldErrors[`models.${name}.pin`]" class="err">{{ fieldErrors[`models.${name}.pin`] }}</p>
@@ -339,7 +348,7 @@ function isPinned(model: string, idx: number) {
             class="btn btn-sm"
             type="button"
             :class="{ 'btn-primary': isPinned(name, idx) }"
-            :title="sticky ? '设为 pin' : '预设切换 sticky 后使用的 pin'"
+            title="设为指定模型"
             @click="setPin(name, idx)"
           >
             Pin
@@ -356,14 +365,9 @@ function isPinned(model: string, idx: number) {
 
       <div class="card-foot">
         <button class="btn btn-sm" type="button" @click="addRef(name)">添加引用</button>
-        <button
-          v-if="m.pinned_provider"
-          class="btn btn-sm btn-ghost"
-          type="button"
-          @click="clearPin(name)"
-        >
-          清除 pin（{{ m.pinned_provider }}/{{ m.pinned_model }}）
-        </button>
+        <span v-if="m.pinned_provider" class="pin-summary muted">
+          当前指定：{{ m.pinned_provider }}/{{ m.pinned_model }}
+        </span>
       </div>
     </article>
   </section>
@@ -492,6 +496,7 @@ function isPinned(model: string, idx: number) {
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
+.pin-summary { align-self: center; font-size: 0.78rem; }
 .err { color: var(--danger); font-size: 0.78rem; margin: 0.25rem 0 0; }
 @media (max-width: 800px) {
   .ref-row {
