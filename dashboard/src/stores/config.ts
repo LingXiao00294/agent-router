@@ -210,10 +210,27 @@ export const useConfigStore = defineStore("config", () => {
     return Object.keys(errs).length === 0;
   }
 
+  function validationFailureMessage(action: "save" | "switch"): string {
+    const pinError = Object.entries(fieldErrors.value).find(([key]) =>
+      key.endsWith(".pin"),
+    );
+    if (pinError) {
+      const modelName = pinError[0].slice("models.".length, -".pin".length);
+      const prefix =
+        action === "switch"
+          ? "无法切换到 sticky 模式"
+          : "无法保存 sticky 模式";
+      return `${prefix}：模型「${modelName}」未指定有效 pin`;
+    }
+    return action === "switch"
+      ? "配置校验失败，无法切换 Mode"
+      : "请先修正表单错误";
+  }
+
   async function save() {
     if (!draft.value) return;
     if (!validate()) {
-      throw new Error("请先修正表单错误");
+      throw new Error(validationFailureMessage("save"));
     }
     saving.value = true;
     error.value = null;
@@ -243,6 +260,8 @@ export const useConfigStore = defineStore("config", () => {
     if (draft.value.router.mode === next) return;
 
     saving.value = true;
+    const previousError = error.value;
+    const previousFieldErrors = fieldErrors.value;
     error.value = null;
     const prev = draft.value.router.mode;
     draft.value = {
@@ -255,14 +274,7 @@ export const useConfigStore = defineStore("config", () => {
           ...draft.value,
           router: { ...draft.value.router, mode: prev },
         };
-        const firstError =
-          Object.entries(fieldErrors.value).find(([key]) => key.endsWith(".pin")) ??
-          Object.entries(fieldErrors.value)[0];
-        throw new Error(
-          firstError
-            ? `无法切换 Mode：请先修正「${firstError[0]}」：${firstError[1]}`
-            : "配置校验失败，无法切换 Mode",
-        );
+        throw new Error(validationFailureMessage("switch"));
       }
       await api.putConfig(buildPayload());
       await load();
@@ -273,7 +285,8 @@ export const useConfigStore = defineStore("config", () => {
           router: { ...draft.value.router, mode: prev },
         };
       }
-      error.value = err instanceof Error ? err.message : "切换 Mode 失败";
+      error.value = previousError;
+      fieldErrors.value = previousFieldErrors;
       throw err;
     } finally {
       saving.value = false;

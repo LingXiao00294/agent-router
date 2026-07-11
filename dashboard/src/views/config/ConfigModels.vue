@@ -292,7 +292,7 @@ function isPinned(model: string, idx: number) {
           <p class="muted tiny">
             拖动左侧手柄调整链顺序（priority）
             <template v-if="sticky"> · sticky 需 pin</template>
-            <template v-else> · failover 时 pin UI 可禁用</template>
+            <template v-else> · 可预设切换 sticky 后使用的 pin</template>
           </p>
           <p v-if="fieldErrors[`models.${name}`]" class="err">{{ fieldErrors[`models.${name}`] }}</p>
           <p v-if="fieldErrors[`models.${name}.pin`]" class="err">{{ fieldErrors[`models.${name}.pin`] }}</p>
@@ -339,8 +339,7 @@ function isPinned(model: string, idx: number) {
             class="btn btn-sm"
             type="button"
             :class="{ 'btn-primary': isPinned(name, idx) }"
-            :disabled="!sticky"
-            :title="sticky ? '设为 pin' : 'failover 下 pin 无效'"
+            :title="sticky ? '设为 pin' : '预设切换 sticky 后使用的 pin'"
             @click="setPin(name, idx)"
           >
             Pin

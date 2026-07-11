@@ -44,6 +44,48 @@ def _safe_key_fields(api_key: str) -> dict[str, object]:
     }
 
 
+def _validate_sticky_pins(data: dict[str, Any]) -> None:
+    """Reject sticky configurations whose model pins are missing or stale."""
+    router = data.get("router")
+    if not isinstance(router, dict) or router.get("mode") != "sticky":
+        return
+
+    models = data.get("models", {})
+    if not isinstance(models, dict):
+        raise HTTPException(400, "无法切换到 sticky 模式：models 配置格式无效")
+
+    for model_name, entry in models.items():
+        if not isinstance(entry, dict):
+            raise HTTPException(
+                400,
+                f"无法切换到 sticky 模式：模型 '{model_name}' 未指定 pin；"
+                "请设置 pinned_provider 和 pinned_model",
+            )
+
+        pinned_provider = entry.get("pinned_provider")
+        pinned_model = entry.get("pinned_model")
+        if not pinned_provider or not pinned_model:
+            raise HTTPException(
+                400,
+                f"无法切换到 sticky 模式：模型 '{model_name}' 未指定 pin；"
+                "请设置 pinned_provider 和 pinned_model",
+            )
+
+        refs = entry.get("providers", [])
+        pin_exists = isinstance(refs, list) and any(
+            isinstance(ref, dict)
+            and ref.get("provider") == pinned_provider
+            and ref.get("model") == pinned_model
+            for ref in refs
+        )
+        if not pin_exists:
+            raise HTTPException(
+                400,
+                f"无法切换到 sticky 模式：模型 '{model_name}' 指定的 pin "
+                f"'{pinned_provider}:{pinned_model}' 不在 provider 链中",
+            )
+
+
 def _read_config_raw(config_path: str) -> dict:
     path = Path(config_path)
     if not path.exists():
@@ -233,6 +275,7 @@ def create_config_router(
 
         api_key 为空或脱敏值时保留原有值，防止误覆盖.
         缺少 router/models 段时合并已有配置，防止误丢失.
+        sticky 模式会在写盘前校验每个模型的 pin.
         """
         try:
             existing = _read_config_raw(config_path)
@@ -242,6 +285,8 @@ def create_config_router(
             for section in ("server", "router", "providers", "models"):
                 if section not in body:
                     body[section] = existing.get(section, {})
+
+            _validate_sticky_pins(body)
 
             # api_key 脱敏值保留原有值
             existing_providers = existing.get("providers", {})
