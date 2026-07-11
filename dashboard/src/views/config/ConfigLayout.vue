@@ -66,20 +66,22 @@ async function reload() {
         <h1>Config</h1>
         <p class="muted">编辑 config.toml · Ctrl/Cmd+S 保存</p>
       </div>
-      <div class="actions floating-actions">
-        <span v-if="dirty" class="badge badge-warn">未保存</span>
-        <button class="btn" type="button" :disabled="loading" title="重新载入配置" @click="reload">
-          刷新
-        </button>
-        <button
-          class="btn btn-primary"
-          type="button"
-          :disabled="!dirty || saving"
-          @click="save"
-        >
-          {{ saving ? "保存中…" : "保存" }}
-        </button>
-      </div>
+      <Teleport to="body">
+        <div class="actions floating-actions">
+          <span v-if="dirty" class="badge badge-warn">未保存</span>
+          <button class="btn" type="button" :disabled="loading" title="重新载入配置" @click="reload">
+            刷新
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="!dirty || saving"
+            @click="save"
+          >
+            {{ saving ? "保存中…" : "保存" }}
+          </button>
+        </div>
+      </Teleport>
     </header>
 
     <div v-if="error" class="error-state panel">{{ error }}</div>
