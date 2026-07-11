@@ -51,6 +51,9 @@ priority = 1
             assert len(config.models["test"].providers) == 1
             assert config.models["test"].providers[0].model == "claude-test"
             assert config.models["test"].providers[0].api_key == "sk-test"
+            assert config.router.mode == "sticky"
+            assert config.models["test"].pinned_provider == "p1"
+            assert config.models["test"].pinned_model == "claude-test"
         finally:
             path.unlink()
 
@@ -528,6 +531,87 @@ class TestHotReloadAPI:
                 # 热重载后模型应已变化
                 resp = await ac.get("/v1/models")
                 assert resp.json()["data"][0]["id"] == "new-model"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_switch_to_sticky_without_pin_is_rejected_before_write(self, store):
+        """缺少模型 pin 时切换 sticky 应返回 400，且不得改写配置文件."""
+        original = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+mode = "failover"
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[[models.unpinned]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(original)
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.put(
+                    "/api/config",
+                    json={"router": {"mode": "sticky"}},
+                )
+
+            assert resp.status_code == 400
+            assert "模型 'unpinned' 未指定 pin" in resp.json()["detail"]
+            assert path.read_text() == original
+            assert app.state.router_engine.config.router.mode == "failover"
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_switch_to_sticky_with_valid_pin_succeeds(self, store):
+        """每个模型都有有效 pin 时应允许切换 sticky."""
+        toml = """\
+[server]
+host = "127.0.0.1"
+port = 9456
+
+[router]
+mode = "failover"
+
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+
+[models.pinned]
+pinned_provider = "p1"
+pinned_model = "m1"
+
+[[models.pinned.providers]]
+provider = "p1"
+model = "m1"
+priority = 1
+"""
+        path = _write_toml(toml)
+        try:
+            config = load_config(path)
+            app = create_app(config, store, config_path=str(path))
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.put(
+                    "/api/config",
+                    json={"router": {"mode": "sticky"}},
+                )
+
+            assert resp.status_code == 200
+            assert load_config(path).router.mode == "sticky"
+            assert app.state.router_engine.config.router.mode == "sticky"
         finally:
             path.unlink(missing_ok=True)
 

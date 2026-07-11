@@ -127,7 +127,8 @@ class TestProviderGateCooldown:
         gate = ProviderGate()
         cfg = _cfg()
         gate.enter_cooldown("p1", 0.05)
-        await asyncio.sleep(0.06)
+        # Windows 的事件循环时钟分辨率可能为 15.625ms，定时回调可能提前一拍。
+        await asyncio.sleep(0.1)
         assert not gate.is_in_cooldown("p1")
         async with gate.slot(cfg):
             pass

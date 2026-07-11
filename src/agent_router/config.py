@@ -101,8 +101,12 @@ class VirtualModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_pin_pair(self) -> VirtualModelConfig:
-        """仅校验 pin 成对出现；链成员校验留给 sticky 模式（见 load_config）."""
+        """为缺失的 pin 选择第一优先级模型，并校验 pin 成对出现。"""
         if not self.pinned_provider and not self.pinned_model:
+            if self.providers:
+                first = min(self.providers, key=lambda provider: provider.priority)
+                self.pinned_provider = first.name
+                self.pinned_model = first.model
             return self
         if not self.pinned_provider or not self.pinned_model:
             raise ValueError("pinned_provider 与 pinned_model 必须同时设置")
@@ -123,7 +127,7 @@ class RouterConfig(BaseModel):
     failure_threshold: int = 5
     recovery_timeout: float = 600.0
     # 全局路由模式：failover=按 priority 故障转移；sticky=各虚拟模型钉死 pinned 项
-    mode: Literal["failover", "sticky"] = "failover"
+    mode: Literal["failover", "sticky"] = "sticky"
 
 
 class AppConfig(BaseModel):

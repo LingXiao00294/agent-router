@@ -1,87 +1,119 @@
+import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { ref, computed, watch } from "vue";
-import { usePreferredDark } from "@vueuse/core";
-import { useLocalStorageState } from "../composables/useLocalStorageState";
-import { useSidebarShell } from "../composables/useSidebarShell";
-import {
-  CONFIG_NAV_ITEMS,
-  DEFAULT_CONFIG_NAV_ORDER,
-  resolveConfigNavOrder,
-} from "../config/nav";
+import { useLocalStorage } from "@vueuse/core";
+import * as api from "@/api";
+import type { AppConfig, CircuitBreakerMap, RouterMode } from "@/api/types";
+import { useConfigStore } from "@/stores/config";
+import { normalizeAppConfig } from "@/utils/configPayload";
 
-type ThemeMode = "dark" | "light" | "system";
+export type ThemeMode = "light" | "dark";
 
 export const useAppStore = defineStore("app", () => {
-  const themeMode = ref<ThemeMode>("dark");
-  const sidebar = useSidebarShell();
-  const configNavOrder = useLocalStorageState<string[]>(
-    "agent-router-config-nav-order",
-    DEFAULT_CONFIG_NAV_ORDER,
-    {
-      deserialize: (raw) => resolveConfigNavOrder(JSON.parse(raw) as string[]),
+  const theme = useLocalStorage<ThemeMode>("ar-theme", "light");
+  const healthy = ref<boolean | null>(null);
+  const healthError = ref<string | null>(null);
+  const config = ref<AppConfig | null>(null);
+  const configLoading = ref(false);
+  const configError = ref<string | null>(null);
+  const circuit = ref<CircuitBreakerMap>({});
+  const savingMode = ref(false);
+  const staleData = ref(false);
+
+  const mode = computed(() => config.value?.router.mode ?? "sticky");
+
+  function applyTheme(next: ThemeMode) {
+    theme.value = next;
+    document.documentElement.setAttribute("data-theme", next);
+  }
+
+  function initTheme() {
+    applyTheme(theme.value);
+  }
+
+  function toggleTheme() {
+    applyTheme(theme.value === "light" ? "dark" : "light");
+  }
+
+  async function checkHealth() {
+    try {
+      const res = await api.getHealth();
+      healthy.value = res.status === "ok";
+      healthError.value = null;
+    } catch (err) {
+      healthy.value = false;
+      healthError.value = err instanceof Error ? err.message : "unreachable";
     }
+  }
+
+  async function loadConfig(silent = false) {
+    if (!silent) configLoading.value = true;
+    configError.value = null;
+    try {
+      config.value = normalizeAppConfig(await api.getConfig());
+    } catch (err) {
+      configError.value = err instanceof Error ? err.message : "加载配置失败";
+      if (!silent) throw err;
+    } finally {
+      configLoading.value = false;
+    }
+  }
+
+  async function loadCircuit(silent = false) {
+    try {
+      circuit.value = await api.getCircuitBreaker();
+    } catch (err) {
+      if (!silent) throw err;
+    }
+  }
+
+  /** Immediate mode PUT via config store sanitize path; syncs app.config after. */
+  async function setMode(next: RouterMode) {
+    if (savingMode.value) return;
+    const configStore = useConfigStore();
+    if (configStore.dirty) {
+      throw new Error("配置页有未保存更改，请先保存或刷新后再切换故障转移");
+    }
+    const prev = config.value?.router.mode;
+    if (prev === next) return;
+    savingMode.value = true;
+    try {
+      await configStore.setRouterMode(next);
+      await loadConfig(true);
+    } catch (err) {
+      if (config.value && prev) {
+        config.value = {
+          ...config.value,
+          router: { ...config.value.router, mode: prev },
+        };
+      }
+      throw err;
+    } finally {
+      savingMode.value = false;
+    }
+  }
+
+  const openCircuits = computed(() =>
+    Object.entries(circuit.value).filter(([, s]) => s !== "closed"),
   );
-  const preferredDark = usePreferredDark();
-
-  const orderedConfigNavItems = computed(() => {
-    const byId = new Map(CONFIG_NAV_ITEMS.map((item) => [item.id, item]));
-    return resolveConfigNavOrder(configNavOrder.value)
-      .map((id) => byId.get(id))
-      .filter((item): item is (typeof CONFIG_NAV_ITEMS)[number] => !!item);
-  });
-
-  const resolvedTheme = computed<"dark" | "light">(() => {
-    if (themeMode.value === "system") return preferredDark.value ? "dark" : "light";
-    return themeMode.value;
-  });
-
-  function setTheme(mode: ThemeMode) {
-    themeMode.value = mode;
-    localStorage.setItem("agent-router-theme", mode);
-    applyTheme();
-  }
-
-  function loadTheme() {
-    const stored = localStorage.getItem("agent-router-theme") as ThemeMode | null;
-    if (stored && ["dark", "light", "system"].includes(stored)) {
-      themeMode.value = stored;
-    }
-    applyTheme();
-  }
-
-  function applyTheme() {
-    document.documentElement.setAttribute("data-theme", resolvedTheme.value);
-  }
-
-  // system 模式下，OS 深/浅色变化时自动跟随（setTheme/loadTheme 已各自立即应用一次）
-  watch(resolvedTheme, applyTheme);
-
-  function toggleSidebar() {
-    sidebar.toggle();
-  }
-
-  function reorderConfigNav(from: number, to: number) {
-    if (from === to) return;
-    const order = [...configNavOrder.value];
-    const [item] = order.splice(from, 1);
-    if (!item) return;
-    order.splice(to, 0, item);
-    configNavOrder.value = order;
-  }
 
   return {
-    themeMode,
-    sidebarCollapsed: sidebar.collapsed,
-    sidebarIsMobile: sidebar.isMobile,
-    sidebarIsCompact: sidebar.isCompact,
-    sidebarCurrentWidth: sidebar.currentWidth,
-    onSidebarTransitionEnd: sidebar.onTransitionEnd,
-    configNavOrder,
-    orderedConfigNavItems,
-    resolvedTheme,
-    setTheme,
-    loadTheme,
-    toggleSidebar,
-    reorderConfigNav,
+    theme,
+    healthy,
+    healthError,
+    config,
+    configLoading,
+    configError,
+    circuit,
+    savingMode,
+    staleData,
+    mode,
+    openCircuits,
+    applyTheme,
+    initTheme,
+    toggleTheme,
+    checkHealth,
+    loadConfig,
+    loadCircuit,
+    setMode,
   };
 });

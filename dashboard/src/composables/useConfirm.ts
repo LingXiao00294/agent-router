@@ -1,39 +1,45 @@
-import { ref } from "vue";
+import { inject, provide, ref, type InjectionKey, type Ref } from "vue";
 
-export interface ConfirmOptions {
-  title?: string;
+interface ConfirmOptions {
+  title: string;
   message: string;
   confirmText?: string;
-  cancelText?: string;
-  variant?: "danger" | "primary";
+  danger?: boolean;
 }
 
 interface ConfirmState extends ConfirmOptions {
-  resolve: (value: boolean) => void;
+  resolve: (ok: boolean) => void;
 }
 
-export const activeConfirm = ref<ConfirmState | null>(null);
-
-export function confirm(options: ConfirmOptions): Promise<boolean> {
-  return new Promise((resolve) => {
-    activeConfirm.value = {
-      title: options.title || "请确认",
-      message: options.message,
-      confirmText: options.confirmText || "确认",
-      cancelText: options.cancelText || "取消",
-      variant: options.variant || "primary",
-      resolve,
-    };
-  });
+interface ConfirmApi {
+  state: Ref<ConfirmState | null>;
+  confirm: (opts: ConfirmOptions) => Promise<boolean>;
+  answer: (ok: boolean) => void;
 }
 
-export function resolveConfirm(result: boolean) {
-  if (activeConfirm.value) {
-    activeConfirm.value.resolve(result);
-    activeConfirm.value = null;
+const KEY: InjectionKey<ConfirmApi> = Symbol("confirm");
+
+export function provideConfirm(): ConfirmApi {
+  const state = ref<ConfirmState | null>(null);
+
+  function answer(ok: boolean) {
+    state.value?.resolve(ok);
+    state.value = null;
   }
+
+  function confirm(opts: ConfirmOptions): Promise<boolean> {
+    return new Promise((resolve) => {
+      state.value = { ...opts, resolve };
+    });
+  }
+
+  const api: ConfirmApi = { state, confirm, answer };
+  provide(KEY, api);
+  return api;
 }
 
-export function useConfirm() {
-  return { confirm };
+export function useConfirm(): ConfirmApi {
+  const api = inject(KEY);
+  if (!api) throw new Error("Confirm not provided");
+  return api;
 }

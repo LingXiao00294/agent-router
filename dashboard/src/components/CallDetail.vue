@@ -1,204 +1,219 @@
-<template>
-  <UiModal
-    :open="!!call"
-    title="调用详情"
-    size="lg"
-    @close="$emit('close')"
-  >
-    <div v-if="call" class="call-detail">
-      <div class="detail-grid">
-        <div class="kv"><span class="key">ID</span><span class="value">{{ call.id }}</span></div>
-        <div class="kv"><span class="key">时间</span><span class="value">{{ fmt(call.timestamp) }}</span></div>
-        <div class="kv"><span class="key">虚拟模型</span><span class="value">{{ call.virtual_model }}</span></div>
-        <div class="kv"><span class="key">Provider</span><span class="value">{{ call.provider_name || call.provider_type || "-" }}</span></div>
-        <div class="kv"><span class="key">模型</span><span class="value">{{ call.provider_model || "-" }}</span></div>
-        <div class="kv"><span class="key">尝试次数</span><span class="value">{{ call.attempt }}</span></div>
-        <div class="kv">
-          <span class="key">状态</span>
-          <UiBadge :variant="call.status === 'success' ? 'success' : 'error'" size="sm">
-            {{ call.status }}
-          </UiBadge>
-        </div>
-        <div class="kv"><span class="key">延迟</span><span class="value">{{ call.latency_ms ?? "-" }}ms</span></div>
-      </div>
-
-      <div v-if="failoverList.length" class="detail-section">
-        <h4 class="section-title">故障转移链路</h4>
-        <div class="failover-chain">
-          <div v-for="(fo, i) in failoverList" :key="i" class="failover-entry">
-            <span class="failover-step">{{ i + 1 }}</span>
-            <span class="failover-provider">{{ fo.provider }}</span>
-            <span class="failover-model">{{ fo.model }}</span>
-            <span class="failover-error" :title="fo.error">{{ fo.error }}</span>
-            <span v-if="fo.latency_ms != null" class="failover-latency">{{ fo.latency_ms }}ms</span>
-          </div>
-          <div class="failover-entry success">
-            <span class="failover-step">{{ failoverList.length + 1 }}</span>
-            <span class="failover-provider">{{ call.provider_name || call.provider_type }}</span>
-            <span class="failover-model">{{ call.provider_model }}</span>
-            <span class="failover-ok">成功</span>
-            <span v-if="call.latency_ms != null" class="failover-latency">{{ call.latency_ms }}ms</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="detail-grid">
-        <div class="kv"><span class="key">输入 Token</span><span class="value">{{ call.input_tokens ?? "-" }}</span></div>
-        <div class="kv"><span class="key">输出 Token</span><span class="value">{{ call.output_tokens ?? "-" }}</span></div>
-        <div class="kv"><span class="key">Cache 读取</span><span class="value">{{ call.cache_read_tokens ?? "-" }}</span></div>
-        <div class="kv"><span class="key">Cache 写入</span><span class="value">{{ call.cache_write_tokens ?? "-" }}</span></div>
-        <div class="kv"><span class="key">费用</span><span class="value">${{ (call.cost_usd || 0).toFixed(6) }}</span></div>
-        <div class="kv"><span class="key">请求估算 Token</span><span class="value">{{ call.request_tokens ?? "-" }}</span></div>
-      </div>
-
-      <div v-if="call.error_message" class="detail-section">
-        <h4 class="section-title">错误信息</h4>
-        <pre class="code-block error-block">{{ call.error_message }}</pre>
-      </div>
-
-      <JsonPanel v-if="call.request_body" title="请求体" :raw="call.request_body" />
-      <JsonPanel v-if="call.response_body" title="响应体" :raw="call.response_body" />
-    </div>
-  </UiModal>
-</template>
-
 <script setup lang="ts">
-import { computed } from "vue";
-import type { CallRecord, FailoverEntry } from "../api";
-import UiModal from "./ui/UiModal.vue";
-import UiBadge from "./ui/UiBadge.vue";
-import JsonPanel from "./JsonPanel.vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import type { CallRecord } from "@/api/types";
+import {
+  formatLatency,
+  formatTime,
+  formatTokens,
+  formatUsd,
+  parseFailover,
+  prettyJson,
+} from "@/utils/format";
+import { useOverlayChrome } from "@/composables/useOverlayChrome";
 
-const props = defineProps<{ call: CallRecord | null }>();
-defineEmits<{ close: [] }>();
+const props = defineProps<{
+  record: CallRecord | null;
+  loading: boolean;
+  error: string | null;
+}>();
 
-const failoverList = computed<FailoverEntry[]>(() => {
-  if (!props.call?.failover_details) return [];
-  try {
-    return JSON.parse(props.call.failover_details);
-  } catch {
-    return [];
+const emit = defineEmits<{ close: [] }>();
+
+const drawerRef = ref<HTMLElement | null>(null);
+const overlayActive = ref(true);
+useOverlayChrome(overlayActive, drawerRef);
+
+const failover = computed(() => parseFailover(props.record?.failover_details ?? null));
+
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    emit("close");
   }
-});
-
-function fmt(ts: string) {
-  return ts ? new Date(ts).toLocaleString() : "-";
 }
+
+onMounted(() => window.addEventListener("keydown", onKey));
+onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
+<template>
+  <Teleport to="body">
+    <div class="overlay" @click.self="$emit('close')">
+      <aside
+        ref="drawerRef"
+        class="drawer"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+      >
+        <header class="drawer-head">
+          <div>
+            <h2>调用详情</h2>
+            <p v-if="record" class="muted mono">{{ record.id }}</p>
+          </div>
+          <button class="btn btn-sm" type="button" @click="$emit('close')">关闭</button>
+        </header>
+
+        <div v-if="loading" class="empty-state">加载中…</div>
+        <div v-else-if="error" class="error-state">{{ error }}</div>
+        <div v-else-if="record" class="body">
+          <section class="meta">
+            <div><span class="k">时间</span><span class="mono">{{ formatTime(record.timestamp) }}</span></div>
+            <div><span class="k">虚拟模型</span><span class="mono">{{ record.virtual_model }}</span></div>
+            <div><span class="k">Provider</span><span class="mono">{{ record.provider_name || "—" }} ({{ record.provider_type || "—" }})</span></div>
+            <div><span class="k">真实模型</span><span class="mono">{{ record.provider_model || "—" }}</span></div>
+            <div><span class="k">URL</span><span class="mono wrap">{{ record.provider_url || "—" }}</span></div>
+            <div><span class="k">Attempt</span><span class="mono">{{ record.attempt }}</span></div>
+            <div><span class="k">状态</span>
+              <span class="badge" :class="record.status === 'success' ? 'badge-success' : 'badge-danger'">
+                {{ record.status }}
+              </span>
+            </div>
+            <div><span class="k">延迟</span><span class="mono">{{ formatLatency(record.latency_ms) }}</span></div>
+            <div><span class="k">Token</span><span class="mono">{{ formatTokens(record.input_tokens) }} / {{ formatTokens(record.output_tokens) }}</span></div>
+            <div><span class="k">Cache</span><span class="mono">{{ formatTokens(record.cache_read_tokens) }} / {{ formatTokens(record.cache_write_tokens) }}</span></div>
+            <div><span class="k">费用</span><span class="mono">{{ formatUsd(record.cost_usd) }}</span></div>
+          </section>
+
+          <section v-if="record.error_type || record.error_message" class="block">
+            <h3>错误</h3>
+            <p class="mono">{{ record.error_type }} — {{ record.error_message }}</p>
+          </section>
+
+          <section v-if="failover.length || record.attempt > 1" class="block">
+            <h3>Failover 链</h3>
+            <ol v-if="failover.length" class="chain">
+              <li v-for="(f, i) in failover" :key="i">
+                <span class="badge badge-danger">fail</span>
+                <span class="mono">{{ f.provider }} / {{ f.model }}</span>
+                <span class="muted">{{ f.error }}</span>
+                <span v-if="f.latency_ms != null" class="mono muted">{{ f.latency_ms }}ms</span>
+              </li>
+            </ol>
+            <div v-if="record.status === 'success' && record.provider_name" class="chain-ok">
+              <span class="badge badge-success">hit</span>
+              <span class="mono">{{ record.provider_name }} / {{ record.provider_model }}</span>
+            </div>
+          </section>
+
+          <section class="block">
+            <h3>Request</h3>
+            <pre class="json mono">{{ prettyJson(record.request_body) || "—" }}</pre>
+          </section>
+          <section class="block">
+            <h3>Response</h3>
+            <pre class="json mono">{{ prettyJson(record.response_body) || "—" }}</pre>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </Teleport>
+</template>
+
 <style scoped>
-.call-detail {
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(10, 14, 20, 0.4);
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+.drawer {
+  width: min(560px, 100%);
+  height: 100%;
+  min-height: 100%;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  animation: slide-in 0.22s ease;
 }
-.detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
+@keyframes slide-in {
+  from { transform: translateX(24px); opacity: 0.6; }
+  to { transform: none; opacity: 1; }
 }
-.kv {
+.drawer-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-elevated);
-  border-radius: var(--radius-md);
-  gap: var(--space-3);
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
 }
-.key {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-.value {
-  color: var(--color-text-default);
-  font-size: var(--text-base);
-  font-family: var(--font-mono);
-  word-break: break-all;
-  text-align: right;
-}
-
-.detail-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.section-title {
-  font-size: var(--text-md);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-secondary);
+.drawer-head h2 {
   margin: 0;
+  font-size: 1.1rem;
 }
-
-.failover-chain {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+.drawer-head p {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
 }
-.failover-entry {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-elevated);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  border-left: 3px solid var(--color-danger);
-}
-.failover-entry.success {
-  border-left-color: var(--color-success);
-}
-.failover-step {
-  background: var(--color-surface0);
-  color: var(--color-text-muted);
-  min-width: 20px;
-  text-align: center;
-  border-radius: var(--radius-sm);
-  padding: 1px 4px;
-  font-size: var(--text-xs);
-}
-.failover-provider {
-  color: var(--color-text-default);
-  font-weight: var(--font-semibold);
-}
-.failover-model {
-  color: var(--color-text-muted);
-}
-.failover-error {
-  color: var(--color-danger);
+.body {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.failover-ok {
-  color: var(--color-success);
-}
-.failover-latency {
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-
-.code-block {
-  background: var(--color-crust);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 260px;
+  min-height: 0;
   overflow: auto;
-  font-family: var(--font-mono);
+  padding: 1rem 1.1rem 2rem;
 }
-.error-block {
-  color: var(--color-danger);
+.meta {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 1.25rem;
 }
-
-@media (max-width: 640px) {
-  .detail-grid {
-    grid-template-columns: 1fr;
-  }
+.meta > div {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 0.5rem;
+  align-items: start;
+}
+.k {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.wrap {
+  word-break: break-all;
+  white-space: normal;
+}
+.block {
+  margin-top: 1.1rem;
+}
+.block h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+.chain {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.45rem;
+}
+.chain li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+.chain-ok {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.json {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  overflow: auto;
+  max-height: 320px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

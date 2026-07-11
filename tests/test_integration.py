@@ -76,6 +76,7 @@ def app_config():
                 providers=[
                     ProviderConfig(
                         type="anthropic",
+                        name="anthropic",
                         model="claude-haiku-4-5-20251001",
                         api_key="sk-ant-test",
                         base_url="https://api.anthropic.com",

@@ -226,7 +226,10 @@ def test_config_validate_outputs_route_summary(tmp_path, capsys):
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "配置有效" in out
-    assert "sonnet-router: p1:sonnet-first(p1) -> p2:sonnet-second(p2)" in out
+    assert (
+        "sonnet-router [pin=p1:sonnet-first]: "
+        "p1:sonnet-first(p1) -> p2:sonnet-second(p2)"
+    ) in out
 
 
 def test_serve_allows_unresolved_api_key_for_dashboard_setup(

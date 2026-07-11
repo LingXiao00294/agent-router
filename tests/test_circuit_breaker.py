@@ -7,6 +7,9 @@ import pytest
 from agent_router.circuit_breaker import CircuitBreaker, CircuitState
 from agent_router.routing import AllProvidersFailedError, Router
 
+# 留出超过 Windows 15.625ms 时钟分辨率的余量，避免 50ms 超时测试抖动。
+_RECOVERY_WAIT_SECONDS = 0.1
+
 
 class TestCircuitBreakerUnit:
     async def test_initial_state_is_closed(self):
@@ -52,14 +55,14 @@ class TestCircuitBreakerUnit:
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
         await cb.record_failure("p1")
         assert await cb.state("p1") == CircuitState.OPEN
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         assert await cb.state("p1") == CircuitState.HALF_OPEN
         assert await cb.is_available("p1")
 
     async def test_half_open_success_closes_circuit(self):
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
         await cb.record_failure("p1")
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         assert await cb.state("p1") == CircuitState.HALF_OPEN
         await cb.record_success("p1")
         assert await cb.state("p1") == CircuitState.CLOSED
@@ -67,7 +70,7 @@ class TestCircuitBreakerUnit:
     async def test_half_open_failure_reopens_circuit(self):
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
         await cb.record_failure("p1")
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         assert await cb.state("p1") == CircuitState.HALF_OPEN
         await cb.record_failure("p1")
         assert await cb.state("p1") == CircuitState.OPEN
@@ -109,7 +112,7 @@ class TestCircuitBreakerUnit:
         # Global timeout (10s) hasn't passed
         assert await cb.state("p1") == CircuitState.OPEN
         # Per-provider timeout (0.05s) should allow transition
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         assert await cb.state("p1", recovery_timeout=0.05) == CircuitState.HALF_OPEN
 
     async def test_per_provider_recovery_timeout_shorter_than_global(self):
@@ -117,7 +120,7 @@ class TestCircuitBreakerUnit:
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=10.0)
         await cb.record_failure("p1")
         await cb.record_failure("p2")
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         # p1 uses short per-provider timeout → HALF_OPEN
         assert await cb.state("p1", recovery_timeout=0.05) == CircuitState.HALF_OPEN
         # p2 uses global timeout (10s) → still OPEN
@@ -128,7 +131,7 @@ class TestCircuitBreakerUnit:
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=10.0)
         await cb.record_failure("p1")
         assert not await cb.is_available("p1")
-        time.sleep(0.06)
+        time.sleep(_RECOVERY_WAIT_SECONDS)
         assert not await cb.is_available("p1")  # global timeout
         assert await cb.is_available(
             "p1", recovery_timeout=0.05

@@ -43,6 +43,7 @@ class TestRouterModelLookup:
     async def test_unresolved_api_key_provider_is_skipped(self, http_client):
         config = AppConfig(
             server=ServerConfig(),
+            router=RouterConfig(mode="failover"),
             models={
                 "m": VirtualModelConfig(
                     providers=[
@@ -206,6 +207,7 @@ class TestRateLimitRouting:
         async with httpx.AsyncClient(transport=transport) as client:
             config = AppConfig(
                 server=ServerConfig(),
+                router=RouterConfig(mode="failover"),
                 models={
                     "m": VirtualModelConfig(
                         providers=[
@@ -429,6 +431,7 @@ class TestRateLimitRouting:
         async with httpx.AsyncClient(transport=transport) as client:
             config = AppConfig(
                 server=ServerConfig(),
+                router=RouterConfig(mode="failover"),
                 models={
                     "m": VirtualModelConfig(
                         providers=[
@@ -482,6 +485,7 @@ class TestRateLimitRouting:
         async with httpx.AsyncClient(transport=transport) as client:
             config = AppConfig(
                 server=ServerConfig(),
+                router=RouterConfig(mode="failover"),
                 models={
                     "m": VirtualModelConfig(
                         providers=[

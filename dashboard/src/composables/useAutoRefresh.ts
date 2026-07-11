@@ -1,80 +1,19 @@
-import { ref, watch, onScopeDispose } from "vue";
-import { useDocumentVisibility } from "@vueuse/core";
+import { onScopeDispose } from "vue";
+import { useRefreshStore } from "@/stores/refresh";
 
-const DEFAULT_INTERVAL = 10_000;
-export const intervals = [5_000, 10_000, 30_000, 60_000];
-
-const enabled = ref(true);
-const intervalMs = ref(DEFAULT_INTERVAL);
-const lastTick = ref(Date.now());
-const callbacks = new Set<() => void | Promise<void>>();
-let timer: ReturnType<typeof setInterval> | null = null;
-let watchersCount = 0;
-
-function tick() {
-  lastTick.value = Date.now();
-  callbacks.forEach((cb) => {
-    Promise.resolve(cb()).catch(() => {
-      // 单个回调失败不应中断其他回调
-    });
-  });
-}
-
-function start() {
-  stop();
-  if (enabled.value) {
-    timer = setInterval(tick, intervalMs.value);
-  }
-}
-
-function stop() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}
-
-function restart() {
-  stop();
-  start();
-}
-
-export function useAutoRefresh() {
-  const visibility = useDocumentVisibility();
-  watchersCount++;
-
-  watch(visibility, (v) => {
-    if (v === "visible") start();
-    else stop();
-  });
-
-  watch(enabled, restart);
-  watch(intervalMs, restart);
-
-  onScopeDispose(() => {
-    watchersCount--;
-    if (watchersCount <= 0) stop();
-  });
-
-  return {
-    enabled,
-    intervalMs,
-    intervals,
-    lastTick,
-    register: (cb: () => void | Promise<void>) => {
-      callbacks.add(cb);
-      return () => callbacks.delete(cb);
-    },
-    setEnabled: (value: boolean) => {
-      enabled.value = value;
-    },
-    setIntervalMs: (value: number) => {
-      if (!intervals.includes(value)) return;
-      intervalMs.value = value;
-    },
-    start,
-    stop,
-    restart,
-    tick,
-  };
+/**
+ * Run `fn` on every refresh tick while this component is mounted.
+ *
+ * The refresh store already pauses ticks while the document is hidden, so `fn`
+ * only fires for a visible page. Registration is tied to the component's setup
+ * scope — when the page unmounts, `fn` is removed automatically, so at any
+ * moment only the currently mounted page's callbacks are active.
+ *
+ * A rejected promise from `fn` feeds the global stale-data flag (aggregated in
+ * App.vue). Each page decides whether its silent-refresh failure should count
+ * (e.g. throw when `store.error` is set after a swallowed refresh).
+ */
+export function useAutoRefresh(fn: () => void | Promise<void>) {
+  const refresh = useRefreshStore();
+  onScopeDispose(refresh.register(fn));
 }
