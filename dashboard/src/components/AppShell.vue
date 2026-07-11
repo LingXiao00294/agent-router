@@ -140,7 +140,13 @@ function onInterval(e: Event) {
               <option :value="60">60s</option>
             </select>
           </label>
-          <button class="btn btn-sm" type="button" title="刷新 (R)" @click="refresh.bump()">
+          <button
+            v-if="!route.path.startsWith('/config')"
+            class="btn btn-sm"
+            type="button"
+            title="刷新 (R)"
+            @click="refresh.bump()"
+          >
             刷新
           </button>
           <button class="btn btn-sm" type="button" @click="app.toggleTheme()">

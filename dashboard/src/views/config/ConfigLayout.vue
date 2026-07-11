@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, onBeforeUnmount } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useAppStore } from "@/stores/app";
@@ -22,11 +22,22 @@ const links = [
   { to: "/config/circuit", label: "Circuit" },
 ];
 
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!dirty.value) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+
 onMounted(() => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
   void store
     .load()
     .then(() => app.loadConfig(true))
     .catch((err: Error) => toast.error(err.message));
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", handleBeforeUnload);
 });
 
 async function save() {
@@ -68,7 +79,6 @@ async function reload() {
       </div>
       <Teleport to="body">
         <div class="actions floating-actions">
-          <span v-if="dirty" class="badge badge-warn">未保存</span>
           <button class="btn" type="button" :disabled="loading" title="重新载入配置" @click="reload">
             刷新
           </button>
