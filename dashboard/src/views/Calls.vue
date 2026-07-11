@@ -12,6 +12,7 @@ import {
   formatUsd,
   parsePositiveInt,
 } from "@/utils/format";
+import { useAutoRefresh } from "@/composables/useAutoRefresh";
 
 const store = useCallsStore();
 const route = useRoute();
@@ -83,6 +84,11 @@ watch(
     void load();
   },
 );
+
+useAutoRefresh(async () => {
+  await load(true);
+  if (store.error) throw new Error(store.error);
+});
 
 watch(
   () => route.query.id,

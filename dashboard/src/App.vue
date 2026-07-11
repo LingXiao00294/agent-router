@@ -8,18 +8,13 @@ import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { provideToast } from "@/composables/useToast";
 import { provideConfirm } from "@/composables/useConfirm";
 import { useAppStore } from "@/stores/app";
-import { useMetricsStore } from "@/stores/metrics";
-import { useCallsStore } from "@/stores/calls";
 import { useConfigStore } from "@/stores/config";
 import { useRefreshStore } from "@/stores/refresh";
-import { parsePositiveInt } from "@/utils/format";
 
 const toast = provideToast();
 const confirmApi = provideConfirm();
 
 const app = useAppStore();
-const metrics = useMetricsStore();
-const calls = useCallsStore();
 const config = useConfigStore();
 const refresh = useRefreshStore();
 const route = useRoute();
@@ -37,43 +32,13 @@ async function bootstrap() {
 
 async function silentRefresh() {
   let failed = false;
-  const name = route.name;
-
   try {
     await Promise.all([app.checkHealth(), app.loadCircuit(true)]);
   } catch {
     failed = true;
   }
-
-  try {
-    if (name === "overview") {
-      await metrics.refresh(true);
-      if (metrics.error) failed = true;
-    } else if (name === "calls") {
-      const q = route.query;
-      await calls.fetchList(
-        {
-          page: parsePositiveInt(q.page, 1),
-          size: parsePositiveInt(q.size, 50, 200),
-          model: typeof q.model === "string" ? q.model : undefined,
-          status: typeof q.status === "string" ? q.status : undefined,
-        },
-        true,
-      );
-      if (calls.error) failed = true;
-    } else if (
-      typeof name === "string" &&
-      name.startsWith("config") &&
-      !config.dirty
-    ) {
-      await config.load();
-      await app.loadConfig(true);
-    }
-  } catch {
-    failed = true;
-  }
-
   if (app.healthy === false) failed = true;
+  if (await refresh.runHandlers()) failed = true;
 
   if (failed) {
     if (!app.staleData) {

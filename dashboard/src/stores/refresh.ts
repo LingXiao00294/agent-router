@@ -35,7 +35,25 @@ export const useRefreshStore = defineStore("refresh", () => {
     tick.value += 1;
   }
 
+  const handlers = new Set<() => void | Promise<void>>();
+
+  function register(fn: () => void | Promise<void>) {
+    handlers.add(fn);
+    return () => {
+      handlers.delete(fn);
+    };
+  }
+
+  /** Run every active handler (only the mounted page's), returning whether any rejected. */
+  async function runHandlers(): Promise<boolean> {
+    if (handlers.size === 0) return false;
+    const results = await Promise.allSettled(
+      [...handlers].map((handler) => Promise.resolve().then(handler)),
+    );
+    return results.some((r) => r.status === "rejected");
+  }
+
   watch([interval, visibility], () => restart(), { immediate: true });
 
-  return { interval, tick, setIntervalSec, bump, restart };
+  return { interval, tick, setIntervalSec, bump, restart, register, runHandlers };
 });

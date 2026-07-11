@@ -12,6 +12,7 @@ import {
   formatTokens,
   formatUsd,
 } from "@/utils/format";
+import { useAutoRefresh } from "@/composables/useAutoRefresh";
 
 const metrics = useMetricsStore();
 const app = useAppStore();
@@ -31,6 +32,11 @@ const { openCircuits } = storeToRefs(app);
 onMounted(() => {
   void metrics.refresh();
   void app.loadCircuit(true);
+});
+
+useAutoRefresh(async () => {
+  await metrics.refresh(true);
+  if (metrics.error) throw new Error(metrics.error);
 });
 </script>
 

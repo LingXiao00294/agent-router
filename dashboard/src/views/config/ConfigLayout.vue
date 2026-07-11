@@ -6,6 +6,7 @@ import { useAppStore } from "@/stores/app";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
 import { useToast } from "@/composables/useToast";
+import { useAutoRefresh } from "@/composables/useAutoRefresh";
 
 const store = useConfigStore();
 const app = useAppStore();
@@ -68,6 +69,12 @@ async function reload() {
     toast.error(err instanceof Error ? err.message : "刷新失败");
   }
 }
+
+useAutoRefresh(async () => {
+  if (dirty.value) return;
+  await store.load();
+  await app.loadConfig(true);
+});
 </script>
 
 <template>
