@@ -159,8 +159,9 @@ function onInterval(e: Event) {
 .shell {
   display: grid;
   grid-template-columns: var(--nav-width) 1fr;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .side {
@@ -170,11 +171,8 @@ function onInterval(e: Event) {
   padding: 1.25rem 1rem;
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  position: sticky;
-  top: 0;
-  align-self: stretch;
-  min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .brand {
@@ -219,15 +217,17 @@ function onInterval(e: Event) {
 
 .main {
   min-width: 0;
-  min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .content {
   flex: 1;
   padding: 1.25rem;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .top {
@@ -239,8 +239,7 @@ function onInterval(e: Event) {
   padding: 0.65rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 10;
 }
 
@@ -363,12 +362,19 @@ function onInterval(e: Event) {
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
   .side {
-    position: relative;
-    height: auto;
+    overflow-y: visible;
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+  .main {
+    overflow: visible;
+  }
+  .content {
+    overflow-y: visible;
   }
   .nav {
     flex-direction: row;
