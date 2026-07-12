@@ -78,14 +78,14 @@ useAutoRefresh(async () => {
       <StatsCards :summary="summary" />
 
       <div class="grid-2">
-        <section class="panel chart-panel">
+        <section class="panel chart-panel trend-panel">
           <div class="panel-head">
             <h2 class="panel-title">日趋势</h2>
             <span class="muted mono">UTC</span>
           </div>
           <TrendChart :data="daily" />
         </section>
-        <section class="panel chart-panel">
+        <section class="panel chart-panel model-panel">
           <div class="panel-head">
             <h2 class="panel-title">真实模型分布</h2>
           </div>
@@ -208,6 +208,11 @@ useAutoRefresh(async () => {
 
 .chart-panel {
   min-height: 320px;
+}
+
+.trend-panel,
+.model-panel {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 960px) {

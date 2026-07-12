@@ -82,11 +82,28 @@ class ProviderConfig(BaseModel):
     max_queue: int = 0
     queue_wait_timeout: float = 30.0
     rate_limit_cooldown: float = 30.0
+    input_price_per_million: float = 0.0
+    output_price_per_million: float = 0.0
+    cache_read_price_per_million: float = 0.0
+    cache_write_price_per_million: float = 0.0
 
     @field_validator("base_url")
     @classmethod
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator(
+        "input_price_per_million",
+        "output_price_per_million",
+        "cache_read_price_per_million",
+        "cache_write_price_per_million",
+    )
+    @classmethod
+    def non_negative_price(cls, v: float) -> float:
+        """Validate that configured token prices are non-negative."""
+        if v < 0:
+            raise ValueError("模型费用必须大于等于 0")
+        return v
 
 
 class VirtualModelConfig(BaseModel):
@@ -152,7 +169,15 @@ def _expand_env_vars(raw: dict) -> dict:
 
 
 def _provider_config_from_def(
-    pdef: ProviderDef, *, name: str, model: str, priority: int
+    pdef: ProviderDef,
+    *,
+    name: str,
+    model: str,
+    priority: int,
+    input_price_per_million: float = 0.0,
+    output_price_per_million: float = 0.0,
+    cache_read_price_per_million: float = 0.0,
+    cache_write_price_per_million: float = 0.0,
 ) -> ProviderConfig:
     return ProviderConfig(
         type=pdef.type,
@@ -168,6 +193,10 @@ def _provider_config_from_def(
         max_queue=pdef.max_queue,
         queue_wait_timeout=pdef.queue_wait_timeout,
         rate_limit_cooldown=pdef.rate_limit_cooldown,
+        input_price_per_million=input_price_per_million,
+        output_price_per_million=output_price_per_million,
+        cache_read_price_per_million=cache_read_price_per_million,
+        cache_write_price_per_million=cache_write_price_per_million,
     )
 
 
@@ -205,6 +234,14 @@ def _resolve_provider_refs(
                     name=provider_name,
                     model=ref["model"],
                     priority=ref["priority"],
+                    input_price_per_million=ref.get("input_price_per_million", 0.0),
+                    output_price_per_million=ref.get("output_price_per_million", 0.0),
+                    cache_read_price_per_million=ref.get(
+                        "cache_read_price_per_million", 0.0
+                    ),
+                    cache_write_price_per_million=ref.get(
+                        "cache_write_price_per_million", 0.0
+                    ),
                 )
             )
         except KeyError as e:

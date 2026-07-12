@@ -191,6 +191,15 @@ export const useConfigStore = defineStore("config", () => {
         if (!r.model?.trim()) {
           errs[`models.${name}.ref.${i}.model`] = "model 不能为空";
         }
+        const prices = [
+          r.input_price_per_million,
+          r.output_price_per_million,
+          r.cache_read_price_per_million,
+          r.cache_write_price_per_million,
+        ];
+        if (prices.some((price) => price != null && (!Number.isFinite(price) || price < 0))) {
+          errs[`models.${name}.ref.${i}.price`] = "费用需为 ≥ 0 的数字，留空按 0 计算";
+        }
       });
       if (draft.value.router.mode === "sticky") {
         const ok =

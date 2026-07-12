@@ -7,8 +7,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agent_router.app import (
+    _calculate_cost_usd,
     _close_prefetched_stream,
     _prefetch_first_chunk,
+    _stream_wrapper,
     create_app,
 )
 from agent_router.config import (
@@ -20,6 +22,97 @@ from agent_router.config import (
 )
 from agent_router.db import CallStore
 from agent_router.routing import Router
+
+
+class TestCostCalculation:
+    def test_calculates_all_token_categories(self):
+        usage = {
+            "input_tokens": 1_000_000,
+            "output_tokens": 500_000,
+            "cache_read_input_tokens": 2_000_000,
+            "cache_creation_input_tokens": 250_000,
+        }
+        outcome = {
+            "pricing": {
+                "input": 1.0,
+                "output": 4.0,
+                "cache_read": 0.1,
+                "cache_write": 1.2,
+            }
+        }
+
+        assert _calculate_cost_usd(usage, outcome) == 3.5
+
+    def test_missing_pricing_is_free(self):
+        assert _calculate_cost_usd({"input_tokens": 1_000_000}, {}) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_streaming_route_persists_calculated_cost(self, store):
+        """Persist streamed usage cost with the selected provider prices."""
+        sse = (
+            b"event: message_start\n"
+            b'data: {"message":{"usage":{"input_tokens":100,'
+            b'"cache_read_input_tokens":200,"cache_creation_input_tokens":50}}}\n\n'
+            b"event: message_delta\n"
+            b'data: {"usage":{"output_tokens":25}}\n\n'
+            b"event: message_stop\n"
+            b"data: {}\n\n"
+        )
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, content=sse)
+        )
+        http_client = httpx.AsyncClient(transport=transport)
+        config = AppConfig(
+            server=ServerConfig(),
+            models={
+                "priced": VirtualModelConfig(
+                    providers=[
+                        ProviderConfig(
+                            type="anthropic",
+                            name="provider",
+                            model="real-model",
+                            api_key="test-key",
+                            base_url="https://provider.test",
+                            priority=1,
+                            input_price_per_million=2.0,
+                            output_price_per_million=8.0,
+                            cache_read_price_per_million=0.2,
+                            cache_write_price_per_million=3.0,
+                        )
+                    ]
+                )
+            },
+        )
+        router = Router(config, http_client)
+        outcome: dict = {}
+        body = {
+            "model": "priced",
+            "stream": True,
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        try:
+            async for _ in _stream_wrapper(
+                router.route_stream(body, outcome),
+                outcome=outcome,
+                store=store,
+                virtual_model="priced",
+                request_body=body,
+                start_time=0.0,
+                request_id="stream-cost-test",
+            ):
+                pass
+        finally:
+            await http_client.aclose()
+
+        calls, total = await store.list_calls()
+        assert total == 1
+        assert calls[0]["input_tokens"] == 100
+        assert calls[0]["output_tokens"] == 25
+        assert calls[0]["cache_read_tokens"] == 200
+        assert calls[0]["cache_write_tokens"] == 50
+        assert calls[0]["cost_usd"] == pytest.approx(0.00059)
 
 
 class TestPrefetchHelpers:
@@ -297,6 +390,27 @@ class TestRecordCall:
         assert summary["success_rate"] == 50.0
         assert summary["total_input_tokens"] == 100
         assert summary["total_output_tokens"] == 50
+
+    @pytest.mark.asyncio
+    async def test_daily_trend_includes_token_details_and_cost(self, store):
+        await store.record(
+            virtual_model="test",
+            status="success",
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_tokens=300,
+            cache_write_tokens=25,
+            cost_usd=0.0125,
+        )
+
+        rows = await store.daily_trend(days=1)
+
+        assert len(rows) == 1
+        assert rows[0]["input_tokens"] == 100
+        assert rows[0]["output_tokens"] == 50
+        assert rows[0]["cache_read_tokens"] == 300
+        assert rows[0]["cache_write_tokens"] == 25
+        assert rows[0]["cost_usd"] == 0.0125
 
     @pytest.mark.asyncio
     async def test_list_calls_pagination(self, store):

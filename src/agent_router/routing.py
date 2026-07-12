@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Literal
 
 import structlog
@@ -359,6 +359,12 @@ class Router:
                         outcome["provider_model"] = provider_cfg.model
                         outcome["provider_url"] = provider_cfg.base_url
                         outcome["attempt"] = attempt
+                        outcome["pricing"] = {
+                            "input": provider_cfg.input_price_per_million,
+                            "output": provider_cfg.output_price_per_million,
+                            "cache_read": provider_cfg.cache_read_price_per_million,
+                            "cache_write": provider_cfg.cache_write_price_per_million,
+                        }
 
                     return result
 
@@ -472,6 +478,12 @@ class Router:
                         outcome["provider_model"] = provider_cfg.model
                         outcome["provider_url"] = provider_cfg.base_url
                         outcome["attempt"] = attempt
+                        outcome["pricing"] = {
+                            "input": provider_cfg.input_price_per_million,
+                            "output": provider_cfg.output_price_per_million,
+                            "cache_read": provider_cfg.cache_read_price_per_million,
+                            "cache_write": provider_cfg.cache_write_price_per_million,
+                        }
 
                     return
 

@@ -6,8 +6,9 @@ import math
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 import structlog
@@ -36,6 +37,30 @@ _SSE_MSG_START_RE = re.compile(
 _SSE_MSG_DELTA_RE = re.compile(
     rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
 )
+
+
+def _calculate_cost_usd(usage: Mapping[str, Any], outcome: Mapping[str, Any]) -> float:
+    """Calculate request cost from usage and per-million-token prices.
+
+    Missing usage values and prices contribute zero, preserving compatibility
+    with providers and model references that do not expose pricing details.
+    """
+    pricing = outcome.get("pricing")
+    if not isinstance(pricing, Mapping):
+        return 0.0
+
+    token_prices = (
+        ("input_tokens", "input"),
+        ("output_tokens", "output"),
+        ("cache_read_input_tokens", "cache_read"),
+        ("cache_creation_input_tokens", "cache_write"),
+    )
+    total = sum(
+        float(usage.get(token_key) or 0) * float(pricing.get(price_key) or 0)
+        for token_key, price_key in token_prices
+    )
+    return round(total / 1_000_000, 10)
+
 
 # 预取首字节最长等待：超时后仍先返回 SSE 响应头，避免代理因无头超时；
 # 快速失败（冷却/容量/全失败）仍可在超时内转成 HTTP 429/503/502。
@@ -228,6 +253,7 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                    cost_usd=_calculate_cost_usd(usage, outcome),
                     failover_details=outcome.get("_failures"),
                 )
                 return JSONResponse(result)
@@ -502,6 +528,7 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            cost_usd=_calculate_cost_usd(usage, outcome),
             failover_details=outcome.get("_failures"),
         )
     except Exception as e:

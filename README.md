@@ -120,18 +120,29 @@ api_key = "${DEEPSEEK_API_KEY}"
 base_url = "https://api.deepseek.com/anthropic"
 
 # 虚拟模型 — 引用 provider + 真实模型名 + 优先级 (越小越优先)
-[[models.opus-router]]
+[models.opus-router]
+pinned_provider = "zai"
+pinned_model = "glm-5.1"
+
+[[models.opus-router.providers]]
 provider = "zai"
 model = "glm-5.1"
 priority = 1
+# 可选模型费用，单位 USD / 1M Token；不填按 0 计算
+input_price_per_million = 1.4
+output_price_per_million = 4.4
+cache_read_price_per_million = 0.26
+cache_write_price_per_million = 0  # 0 与留空等效，Dashboard 保存时会省略
 
-[[models.opus-router]]
+[[models.opus-router.providers]]
 provider = "deepseek"
 model = "deepseek-v4-pro"
 priority = 2
 ```
 
 `${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。未设置时不会阻止 `serve` 启动，方便先打开 dashboard 修改配置；包含未解析 key 的 provider 在实际请求路由时会被跳过，全部 provider 都不可用时返回明确错误。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
+
+模型费用配置在每条真实模型引用上，分别对应输入、输出、缓存读取和缓存写入 Token。四项均可选，留空按 `0` 计算；请求完成后费用会按实际 Token 用量写入调用记录。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
 
 ## API 端点
 
@@ -162,6 +173,7 @@ bun run build     # 生产构建 → dashboard/dist/
 构建后通过 `uv run agent-router dashboard` 启动独立面板，访问 `http://127.0.0.1:5173`。
 为防止误清空上游，Dashboard 保存配置时要求至少保留一个 provider 和一个虚拟模型；该限制不改变配置 API 或 TOML 格式。
 虚拟模型的 provider 引用可通过左侧拖拽把手排序，列表顺序即 failover 使用的 `priority` 顺序。
+每条模型引用可以展开配置输入、输出、缓存读取和缓存写入单价。Overview 的日趋势以多条折线展示四类 Token 用量，并通过右侧 USD 坐标轴展示折算成本。
 Dashboard 顶栏以“故障转移”开关呈现路由模式：关闭时为指定模型模式（内部仍使用 `sticky`），开启时按优先级自动故障转移。路由默认使用指定模型模式；模型未设置有效 pin 时会默认选择第一优先级的有效模型引用。切换到指定模型模式前，每个虚拟模型都必须存在有效 pin，否则切换会失败并返回具体模型名称，原配置保持不变。
 
 ## 开发

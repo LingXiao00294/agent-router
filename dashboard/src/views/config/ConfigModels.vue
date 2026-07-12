@@ -34,6 +34,17 @@ const dragPreview = ref<HTMLElement | null>(null);
 const refKeys = new WeakMap<ModelRef, number>();
 let nextRefKey = 0;
 const DRAG_START_DISTANCE = 6;
+type PriceField =
+  | "input_price_per_million"
+  | "output_price_per_million"
+  | "cache_read_price_per_million"
+  | "cache_write_price_per_million";
+const priceFields: { key: PriceField; label: string }[] = [
+  { key: "input_price_per_million", label: "输入" },
+  { key: "output_price_per_million", label: "输出" },
+  { key: "cache_read_price_per_million", label: "缓存读取" },
+  { key: "cache_write_price_per_million", label: "缓存写入" },
+];
 const dragPreviewRow = computed(() => {
   const source = draggingRef.value;
   return source ? models.value[source.model]?.providers[source.index] ?? null : null;
@@ -75,6 +86,11 @@ function addRef(model: string) {
   if (!m) return;
   const provider = providerNames.value[0] || "";
   m.providers.push({ provider, model: "", priority: m.providers.length + 1 });
+}
+
+function setPrice(row: ModelRef, field: PriceField, event: Event) {
+  const raw = (event.target as HTMLInputElement).value;
+  row[field] = raw === "" ? undefined : Number(raw);
 }
 
 function removeRef(model: string, idx: number) {
@@ -355,11 +371,28 @@ function isPinned(model: string, idx: number) {
           </button>
           <button class="btn btn-sm btn-danger" type="button" @click="removeRef(name, idx)">×</button>
         </div>
+        <div class="price-grid">
+          <span class="price-title muted">费用（USD / 1M Token，可选）</span>
+          <label v-for="price in priceFields" :key="price.key" class="price-field">
+            <span>{{ price.label }}</span>
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              :value="row[price.key] ?? ''"
+              placeholder="0"
+              @input="setPrice(row, price.key, $event)"
+            />
+          </label>
+        </div>
         <p v-if="fieldErrors[`models.${name}.ref.${idx}`]" class="err ref-err">
           {{ fieldErrors[`models.${name}.ref.${idx}`] }}
         </p>
         <p v-if="fieldErrors[`models.${name}.ref.${idx}.model`]" class="err ref-err">
           {{ fieldErrors[`models.${name}.ref.${idx}.model`] }}
+        </p>
+        <p v-if="fieldErrors[`models.${name}.ref.${idx}.price`]" class="err ref-err">
+          {{ fieldErrors[`models.${name}.ref.${idx}.price`] }}
         </p>
       </div>
 
@@ -396,6 +429,13 @@ function isPinned(model: string, idx: number) {
           Pin
         </button>
         <button class="btn btn-sm btn-danger" type="button" disabled>×</button>
+      </div>
+      <div class="price-grid">
+        <span class="price-title muted">费用（USD / 1M Token，可选）</span>
+        <label v-for="price in priceFields" :key="price.key" class="price-field">
+          <span>{{ price.label }}</span>
+          <input :value="dragPreviewRow[price.key] ?? ''" placeholder="0" readonly />
+        </label>
       </div>
     </div>
   </Teleport>
@@ -480,6 +520,26 @@ function isPinned(model: string, idx: number) {
   grid-column: 1 / -1;
   margin: 0;
 }
+.price-grid {
+  display: grid;
+  grid-column: 3 / -1;
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  gap: 0.45rem;
+  align-items: end;
+}
+.price-title {
+  grid-column: 1 / -1;
+  font-size: 0.72rem;
+}
+.price-field {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.price-field input {
+  width: 100%;
+}
 .ref-row select,
 .ref-row input {
   min-height: 34px;
@@ -501,6 +561,10 @@ function isPinned(model: string, idx: number) {
 @media (max-width: 800px) {
   .ref-row {
     grid-template-columns: 1fr;
+  }
+  .price-grid {
+    grid-column: 1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

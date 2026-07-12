@@ -41,6 +41,10 @@ export interface DailyStat {
   day: string;
   count: number;
   success_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
   cost_usd: number | null;
 }
 
@@ -122,6 +126,10 @@ export interface ModelRef {
   provider: string;
   model: string;
   priority: number;
+  input_price_per_million?: number;
+  output_price_per_million?: number;
+  cache_read_price_per_million?: number;
+  cache_write_price_per_million?: number;
 }
 
 export interface VirtualModelConfig {
