@@ -32,6 +32,9 @@ function themeColors() {
     text: styles.getPropertyValue("--chart-axis").trim(),
     grid: styles.getPropertyValue("--chart-grid").trim(),
     muted: styles.getPropertyValue("--text-muted").trim(),
+    series: Array.from({ length: 5 }, (_, index) =>
+      styles.getPropertyValue(`--chart-series-${index + 1}`).trim(),
+    ),
   };
 }
 
@@ -47,7 +50,7 @@ function render() {
   const c = themeColors();
   const days = props.data.map((d) => d.day.slice(5));
   chart.setOption({
-    color: ["#ff4d6d", "#f97316", "#8b5cf6", "#3b82f6", "#22c55e"],
+    color: c.series,
     textStyle: { fontFamily: "IBM Plex Mono, monospace", color: c.text },
     grid: { left: 56, right: 64, top: 48, bottom: 36 },
     tooltip: {

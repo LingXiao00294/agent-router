@@ -132,7 +132,7 @@ priority = 1
 input_price_per_million = 1.4
 output_price_per_million = 4.4
 cache_read_price_per_million = 0.26
-cache_write_price_per_million = 0
+cache_write_price_per_million = 0  # 0 与留空等效，Dashboard 保存时会省略
 
 [[models.opus-router.providers]]
 provider = "deepseek"
