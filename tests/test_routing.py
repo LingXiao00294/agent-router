@@ -227,16 +227,25 @@ class TestRateLimitRouting:
                                 api_key="k2",
                                 base_url="https://p2.test",
                                 priority=2,
+                                input_price_per_million=1.0,
+                                output_price_per_million=4.0,
                             ),
                         ]
                     )
                 },
             )
             router = Router(config, client)
+            outcome: dict = {}
             result = await router.route_non_stream(
-                {"model": "m", "max_tokens": 10, "messages": []}
+                {"model": "m", "max_tokens": 10, "messages": []}, outcome
             )
             assert result["model"] == "m2"
+            assert outcome["pricing"] == {
+                "input": 1.0,
+                "output": 4.0,
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+            }
             # p1 未熔断
             from agent_router.circuit_breaker import CircuitState
 

@@ -13,6 +13,14 @@ from fastapi import APIRouter, HTTPException
 from agent_router.config import has_unresolved_env_var
 
 
+_MODEL_PRICE_FIELDS = (
+    "input_price_per_million",
+    "output_price_per_million",
+    "cache_read_price_per_million",
+    "cache_write_price_per_million",
+)
+
+
 def _mask_key(key: str) -> str:
     if len(key) <= 8:
         return "*" * len(key)
@@ -263,6 +271,11 @@ def create_config_router(
                         "provider": r["provider"],
                         "model": r["model"],
                         "priority": r["priority"],
+                        **{
+                            field: r[field]
+                            for field in _MODEL_PRICE_FIELDS
+                            if field in r
+                        },
                     }
                     for r in sorted(refs, key=lambda r: r.get("priority", 99))
                 ],

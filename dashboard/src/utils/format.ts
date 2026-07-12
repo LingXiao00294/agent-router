@@ -55,7 +55,16 @@ export function fillDailyGaps(rows: DailyStat[], days: number): DailyStat[] {
     const key = d.toISOString().slice(0, 10);
     const hit = map.get(key);
     out.push(
-      hit ?? { day: key, count: 0, success_count: 0, cost_usd: 0 },
+      hit ?? {
+        day: key,
+        count: 0,
+        success_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        cost_usd: 0,
+      },
     );
   }
   return out;

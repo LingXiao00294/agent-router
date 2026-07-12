@@ -25,6 +25,34 @@ def _write_toml(content: str) -> Path:
     return Path(tmp.name)
 
 
+def test_load_model_token_prices():
+    toml = """
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://test.api.com"
+
+[[models.test]]
+provider = "p1"
+model = "claude-test"
+priority = 1
+input_price_per_million = 1.0
+output_price_per_million = 4.0
+cache_read_price_per_million = 0.1
+cache_write_price_per_million = 1.25
+"""
+    path = _write_toml(toml)
+    try:
+        config = load_config(path)
+        model = config.models["test"].providers[0]
+        assert model.input_price_per_million == 1.0
+        assert model.output_price_per_million == 4.0
+        assert model.cache_read_price_per_million == 0.1
+        assert model.cache_write_price_per_million == 1.25
+    finally:
+        path.unlink(missing_ok=True)
+
+
 class TestLoadConfig:
     def test_basic_config(self):
         toml = """
@@ -673,6 +701,8 @@ base_url = "https://api2.anthropic.com"
 provider = "p1"
 model = "model-a"
 priority = 1
+input_price_per_million = 1.5
+output_price_per_million = 6.0
 
 [[models.mymodel]]
 provider = "p2"
@@ -689,6 +719,9 @@ priority = 2
                 resp = await ac.get("/api/config/models")
                 models = resp.json()
                 assert models["mymodel"]["providers"][0]["provider"] == "p1"
+                assert (
+                    models["mymodel"]["providers"][0]["input_price_per_million"] == 1.5
+                )
 
                 # 交换优先级
                 new_body = {
@@ -708,7 +741,12 @@ priority = 2
                     "models": {
                         "mymodel": {
                             "providers": [
-                                {"provider": "p2", "model": "model-b", "priority": 1},
+                                {
+                                    "provider": "p2",
+                                    "model": "model-b",
+                                    "priority": 1,
+                                    "input_price_per_million": 2.5,
+                                },
                                 {"provider": "p1", "model": "model-a", "priority": 2},
                             ],
                         },
@@ -721,6 +759,9 @@ priority = 2
                 resp = await ac.get("/api/config/models")
                 models = resp.json()
                 assert models["mymodel"]["providers"][0]["provider"] == "p2"
+                assert (
+                    models["mymodel"]["providers"][0]["input_price_per_million"] == 2.5
+                )
         finally:
             path.unlink(missing_ok=True)
 

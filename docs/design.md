@@ -105,6 +105,10 @@ base_url = "https://api.z.ai/api/anthropic"
 provider = "anthropic"                    # 引用 [providers] 中的名字
 model = "claude-haiku-4-5-20251001"       # 真实模型名
 priority = 1                              # 优先级 (越小越优先)
+input_price_per_million = 1.0             # 可选，USD / 1M Token
+output_price_per_million = 4.0
+cache_read_price_per_million = 0.1
+cache_write_price_per_million = 1.25
 
 [[models.haiku-router]]
 provider = "zhipu"
@@ -122,7 +126,7 @@ model = "glm-5.1"
 priority = 2
 ```
 
-配置在启动时加载，运行时不可变（修改后需重启）。
+配置在启动时加载，也可通过 Dashboard 保存并热重载。模型费用均可省略，省略时按 0 计算。
 
 ---
 
@@ -405,7 +409,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 | `GET` | `/api/metrics/by-provider` | 按 provider 分组统计 |
 | `GET` | `/api/calls?page=1&size=50` | 分页查询调用列表 |
 | `GET` | `/api/calls/{id}` | 单次调用详情 (含完整 request/response) |
-| `GET` | `/api/metrics/daily` | 每日调用趋势 (最近 30 天) |
+| `GET` | `/api/metrics/daily` | 每日调用、四类 Token 与折算成本趋势 |
 
 ### 9. monitoring.py — 日志
 

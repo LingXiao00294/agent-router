@@ -7,6 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agent_router.app import (
+    _calculate_cost_usd,
     _close_prefetched_stream,
     _prefetch_first_chunk,
     create_app,
@@ -20,6 +21,29 @@ from agent_router.config import (
 )
 from agent_router.db import CallStore
 from agent_router.routing import Router
+
+
+class TestCostCalculation:
+    def test_calculates_all_token_categories(self):
+        usage = {
+            "input_tokens": 1_000_000,
+            "output_tokens": 500_000,
+            "cache_read_input_tokens": 2_000_000,
+            "cache_creation_input_tokens": 250_000,
+        }
+        outcome = {
+            "pricing": {
+                "input": 1.0,
+                "output": 4.0,
+                "cache_read": 0.1,
+                "cache_write": 1.2,
+            }
+        }
+
+        assert _calculate_cost_usd(usage, outcome) == 3.5
+
+    def test_missing_pricing_is_free(self):
+        assert _calculate_cost_usd({"input_tokens": 1_000_000}, {}) == 0.0
 
 
 class TestPrefetchHelpers:
@@ -297,6 +321,27 @@ class TestRecordCall:
         assert summary["success_rate"] == 50.0
         assert summary["total_input_tokens"] == 100
         assert summary["total_output_tokens"] == 50
+
+    @pytest.mark.asyncio
+    async def test_daily_trend_includes_token_details_and_cost(self, store):
+        await store.record(
+            virtual_model="test",
+            status="success",
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_tokens=300,
+            cache_write_tokens=25,
+            cost_usd=0.0125,
+        )
+
+        rows = await store.daily_trend(days=1)
+
+        assert len(rows) == 1
+        assert rows[0]["input_tokens"] == 100
+        assert rows[0]["output_tokens"] == 50
+        assert rows[0]["cache_read_tokens"] == 300
+        assert rows[0]["cache_write_tokens"] == 25
+        assert rows[0]["cost_usd"] == 0.0125
 
     @pytest.mark.asyncio
     async def test_list_calls_pagination(self, store):
