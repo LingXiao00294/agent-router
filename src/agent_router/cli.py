@@ -1103,8 +1103,10 @@ def _query_calls(
     rows = conn.execute(
         f"""SELECT id, timestamp, virtual_model, provider_name, provider_type,
             provider_model, status, latency_ms, input_tokens, output_tokens,
-            cache_read_tokens, cache_write_tokens, cost_usd, error_type,
-            error_message
+            cache_read_tokens, cache_write_tokens,
+            input_price_per_million, output_price_per_million,
+            cache_read_price_per_million, cache_write_price_per_million,
+            cost_usd, error_type, error_message
             FROM calls {where}
             ORDER BY timestamp DESC
             LIMIT ?""",

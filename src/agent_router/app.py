@@ -62,13 +62,28 @@ def _calculate_cost_usd(usage: Mapping[str, Any], outcome: Mapping[str, Any]) ->
     return round(total / 1_000_000, 10)
 
 
-def _price_from_outcome(outcome: Mapping[str, Any], key: str) -> float | None:
-    """Return one configured price without normalizing a missing value to zero."""
+_PRICE_SNAPSHOT_FIELDS = (
+    ("input_price_per_million", "input"),
+    ("output_price_per_million", "output"),
+    ("cache_read_price_per_million", "cache_read"),
+    ("cache_write_price_per_million", "cache_write"),
+)
+
+
+def _price_snapshot_kwargs(outcome: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the four price-snapshot keyword arguments for store.record().
+
+    Extracts the pricing mapping once and preserves ``None`` for unconfigured
+    prices so they persist as SQL NULL rather than 0.
+    """
     pricing = outcome.get("pricing")
     if not isinstance(pricing, Mapping):
-        return None
-    value = pricing.get(key)
-    return float(value) if value is not None else None
+        return {field: None for field, _ in _PRICE_SNAPSHOT_FIELDS}
+    kwargs: dict[str, Any] = {}
+    for field, key in _PRICE_SNAPSHOT_FIELDS:
+        value = pricing.get(key)
+        kwargs[field] = float(value) if value is not None else None
+    return kwargs
 
 
 # 预取首字节最长等待：超时后仍先返回 SSE 响应头，避免代理因无头超时；
@@ -99,12 +114,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await store.init()
-        logger.info("server.start", host=config.server.host, port=config.server.port)
-        yield
-        await http_client.aclose()
-        await store.close()
-        logger.info("server.shutdown")
+        try:
+            await store.init()
+            logger.info(
+                "server.start", host=config.server.host, port=config.server.port
+            )
+            yield
+        finally:
+            await http_client.aclose()
+            await store.close()
+            logger.info("server.shutdown")
 
     app = FastAPI(
         title="Agent Router",
@@ -262,14 +281,7 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
-                    input_price_per_million=_price_from_outcome(outcome, "input"),
-                    output_price_per_million=_price_from_outcome(outcome, "output"),
-                    cache_read_price_per_million=_price_from_outcome(
-                        outcome, "cache_read"
-                    ),
-                    cache_write_price_per_million=_price_from_outcome(
-                        outcome, "cache_write"
-                    ),
+                    **_price_snapshot_kwargs(outcome),
                     cost_usd=_calculate_cost_usd(usage, outcome),
                     failover_details=outcome.get("_failures"),
                 )
@@ -545,10 +557,7 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
-            input_price_per_million=_price_from_outcome(outcome, "input"),
-            output_price_per_million=_price_from_outcome(outcome, "output"),
-            cache_read_price_per_million=_price_from_outcome(outcome, "cache_read"),
-            cache_write_price_per_million=_price_from_outcome(outcome, "cache_write"),
+            **_price_snapshot_kwargs(outcome),
             cost_usd=_calculate_cost_usd(usage, outcome),
             failover_details=outcome.get("_failures"),
         )

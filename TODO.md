@@ -96,62 +96,62 @@ ModelRef + ProviderDef + ActualModelDef + array index
 
 ### 后端与数据库
 
-- [ ] 在 `calls` 表增加以下价格快照字段：
-  - [ ] `input_price_per_million REAL`
-  - [ ] `output_price_per_million REAL`
-  - [ ] `cache_read_price_per_million REAL`
-  - [ ] `cache_write_price_per_million REAL`
-- [ ] 更新 `CallStore.record()`，显式接收并写入四类价格。
-- [ ] 非流式请求成功后，把实际使用模型的四类价格写入调用记录。
-- [ ] 流式请求成功后，把实际使用模型的四类价格写入调用记录。
-- [ ] 失败调用没有实际成功模型时，价格快照保持 `NULL`，不伪造为 `0`。
-- [ ] 保留现有 `cost_usd` 最终计算结果。
-- [ ] 修改真实模型统计 SQL，使用 `provider_name + provider_model` 复合分组。
-- [ ] 确保不同 Provider 下的同名模型不会合并统计。
-- [ ] Metrics API 返回独立的 `provider`、`model` 字段。
-- [ ] Metrics API 不返回拼接后的 `display_name`，展示名统一由 Dashboard 生成。
-- [ ] 明确旧数据库不兼容；检测到缺失字段时给出可操作的重建提示。
-- [ ] 不自动删除或覆盖已有 `calls.db`。
-- [ ] 价格配置在运行时保留 `float | None` 语义，不能在持久化前把缺失价格提前归一化为 `0`。
-- [ ] 费用计算将 `None` 视为 `0`，同时保留快照中的 `NULL`。
+- [x] 在 `calls` 表增加以下价格快照字段：
+  - [x] `input_price_per_million REAL`
+  - [x] `output_price_per_million REAL`
+  - [x] `cache_read_price_per_million REAL`
+  - [x] `cache_write_price_per_million REAL`
+- [x] 更新 `CallStore.record()`，显式接收并写入四类价格。
+- [x] 非流式请求成功后，把实际使用模型的四类价格写入调用记录。
+- [x] 流式请求成功后，把实际使用模型的四类价格写入调用记录。
+- [x] 失败调用没有实际成功模型时，价格快照保持 `NULL`，不伪造为 `0`。
+- [x] 保留现有 `cost_usd` 最终计算结果。
+- [x] 修改真实模型统计 SQL，使用 `provider_name + provider_model` 复合分组。
+- [x] 确保不同 Provider 下的同名模型不会合并统计。
+- [x] Metrics API 返回独立的 `provider`、`model` 字段。
+- [x] Metrics API 不返回拼接后的 `display_name`，展示名统一由 Dashboard 生成。
+- [x] 明确旧数据库不兼容；检测到缺失字段时给出可操作的重建提示。
+- [x] 不自动删除或覆盖已有 `calls.db`。
+- [x] 价格配置在运行时保留 `float | None` 语义，不能在持久化前把缺失价格提前归一化为 `0`。
+- [x] 费用计算将 `None` 视为 `0`，同时保留快照中的 `NULL`。
 
 ### Dashboard
 
-- [ ] 更新真实模型统计类型，包含 `provider` 与 `model`。
-- [ ] 真实模型图表、统计列表和筛选项显示 `<provider>/<model>`。
-- [ ] 调用详情显示 `<provider>/<model>`。
-- [ ] 提供统一的 `formatActualModel(provider, model)` 展示函数，避免各组件自行拼接。
-- [ ] 不从展示字符串解析 Provider 或模型名。
+- [x] 更新真实模型统计类型，包含 `provider` 与 `model`。
+- [x] 真实模型图表、统计列表和筛选项显示 `<provider>/<model>`。
+- [x] 调用详情显示 `<provider>/<model>`。
+- [x] 提供统一的 `formatActualModel(provider, model)` 展示函数，避免各组件自行拼接。
+- [x] 不从展示字符串解析 Provider 或模型名。
 
 ### 测试
 
-- [ ] 测试非流式调用保存四类价格快照。
-- [ ] 测试流式调用保存四类价格快照。
-- [ ] 测试未配置价格时快照为 `NULL`，费用计算按 `0` 处理。
-- [ ] 测试显式配置 `0` 时快照为 `0`，不与 `NULL` 混淆。
-- [ ] 测试失败调用的价格字段为 `NULL`。
-- [ ] 测试非流式 failover 保存最终成功模型的 Provider、模型和价格，而不是首选失败模型的数据。
-- [ ] 测试流式首字节前 failover 保存最终成功模型的 Provider、模型和价格。
-- [ ] 断言 failover 调用的 `cost_usd` 使用最终成功模型的价格快照计算。
-- [ ] 测试两个 Provider 提供同名模型时分别统计。
-- [ ] 测试真实模型 Metrics API 的返回结构。
-- [ ] 测试全新数据库创建后的完整 schema。
-- [ ] 测试旧 schema 被识别并返回明确的手动重建提示。
-- [ ] 测试旧 schema 检测失败后原数据库文件及已有内容保持不变。
-- [ ] 测试 Dashboard 类型检查和生产构建。
+- [x] 测试非流式调用保存四类价格快照。
+- [x] 测试流式调用保存四类价格快照。
+- [x] 测试未配置价格时快照为 `NULL`，费用计算按 `0` 处理。
+- [x] 测试显式配置 `0` 时快照为 `0`，不与 `NULL` 混淆。
+- [x] 测试失败调用的价格字段为 `NULL`。
+- [x] 测试非流式 failover 保存最终成功模型的 Provider、模型和价格，而不是首选失败模型的数据。
+- [x] 测试流式首字节前 failover 保存最终成功模型的 Provider、模型和价格。
+- [x] 断言 failover 调用的 `cost_usd` 使用最终成功模型的价格快照计算。
+- [x] 测试两个 Provider 提供同名模型时分别统计。
+- [x] 测试真实模型 Metrics API 的返回结构。
+- [x] 测试全新数据库创建后的完整 schema。
+- [x] 测试旧 schema 被识别并返回明确的手动重建提示。
+- [x] 测试旧 schema 检测失败后原数据库文件及已有内容保持不变。
+- [x] 测试 Dashboard 类型检查和生产构建。
 
 ### 文档
 
-- [ ] 更新 README 的调用记录与费用说明。
-- [ ] 更新 `docs/design.md` 的 SQLite schema、费用计算和实际模型身份说明。
-- [ ] 明确开发环境需要手动重建旧数据库。
+- [x] 更新 README 的调用记录与费用说明。
+- [x] 更新 `docs/design.md` 的 SQLite schema、费用计算和实际模型身份说明。
+- [x] 明确开发环境需要手动重建旧数据库。
 
 ### 验收标准
 
-- [ ] 每条成功调用都能追溯 Provider、模型、Token、四类价格快照和最终费用；未配置价格明确记录为 `NULL`，并能解释 `cost_usd` 的计算结果。
-- [ ] 调价后历史记录的价格快照不会随当前配置变化。
-- [ ] 同名模型按 Provider 正确区分。
-- [ ] 后端测试、Ruff、格式、ty 和 Dashboard 构建通过。
+- [x] 每条成功调用都能追溯 Provider、模型、Token、四类价格快照和最终费用；未配置价格明确记录为 `NULL`，并能解释 `cost_usd` 的计算结果。
+- [x] 调价后历史记录的价格快照不会随当前配置变化。
+- [x] 同名模型按 Provider 正确区分。
+- [x] 后端测试、Ruff、格式、ty 和 Dashboard 构建通过。
 
 ---
 

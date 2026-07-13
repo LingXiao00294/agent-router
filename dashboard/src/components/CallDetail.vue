@@ -76,7 +76,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <div><span class="k">费用</span><span class="mono">{{ formatUsd(record.cost_usd) }}</span></div>
           </section>
 
-          <section class="block">
+          <section v-if="record.provider_model" class="block">
             <h3>价格快照 <span class="muted">(USD / 1M Token)</span></h3>
             <div class="price-grid">
               <div><span class="k">输入</span><span class="mono">{{ formatUsd(record.input_price_per_million) }}</span></div>

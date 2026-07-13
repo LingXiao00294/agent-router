@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
-import { getByRealModel } from "@/api";
-import type { ModelStatReal } from "@/api/types";
 import { useCallsStore } from "@/stores/calls";
+import { useMetricsStore } from "@/stores/metrics";
 import CallDetail from "@/components/CallDetail.vue";
 import {
   formatActualModel,
@@ -21,7 +20,8 @@ const store = useCallsStore();
 const route = useRoute();
 const router = useRouter();
 const { page, loading, error, detail } = storeToRefs(store);
-const actualModels = ref<ModelStatReal[]>([]);
+const metrics = useMetricsStore();
+const { byRealModel: actualModels } = storeToRefs(metrics);
 
 const filters = computed(() => ({
   page: parsePositiveInt(route.query.page, 1),
@@ -107,11 +107,7 @@ function closeDetail() {
 
 onMounted(() => {
   void load();
-  void getByRealModel().then((rows) => {
-    actualModels.value = rows;
-  }).catch(() => {
-    actualModels.value = [];
-  });
+  if (!metrics.loadedOnce) void metrics.refresh(true).catch(() => {});
 });
 
 watch(
@@ -195,6 +191,12 @@ const emptyKind = computed(() => {
           @change="updateActualModelFilter(($event.target as HTMLSelectElement).value)"
         >
           <option value="">全部</option>
+          <option
+            v-if="selectedActualModelKey && !actualModels.some((r) => actualModelKey(r.provider, r.model) === selectedActualModelKey)"
+            :value="selectedActualModelKey"
+          >
+            {{ formatActualModel(filters.provider, filters.providerModel) }}
+          </option>
           <option
             v-for="row in actualModels"
             :key="actualModelKey(row.provider, row.model)"
