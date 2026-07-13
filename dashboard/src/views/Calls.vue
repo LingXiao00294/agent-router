@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
+import { getByRealModel } from "@/api";
+import type { ModelStatReal } from "@/api/types";
 import { useCallsStore } from "@/stores/calls";
 import CallDetail from "@/components/CallDetail.vue";
 import {
+  formatActualModel,
   formatLatency,
   formatNumber,
   formatTime,
@@ -18,13 +21,39 @@ const store = useCallsStore();
 const route = useRoute();
 const router = useRouter();
 const { page, loading, error, detail } = storeToRefs(store);
+const actualModels = ref<ModelStatReal[]>([]);
 
 const filters = computed(() => ({
   page: parsePositiveInt(route.query.page, 1),
   size: parsePositiveInt(route.query.size, 50, 200),
   model: typeof route.query.model === "string" ? route.query.model : "",
   status: typeof route.query.status === "string" ? route.query.status : "",
+  provider: typeof route.query.provider === "string" ? route.query.provider : "",
+  providerModel:
+    typeof route.query.provider_model === "string"
+      ? route.query.provider_model
+      : "",
 }));
+
+function actualModelKey(provider: string, model: string): string {
+  return JSON.stringify([provider, model]);
+}
+
+const selectedActualModelKey = computed(() => {
+  if (!filters.value.provider || !filters.value.providerModel) return "";
+  return actualModelKey(filters.value.provider, filters.value.providerModel);
+});
+
+function updateActualModelFilter(key: string) {
+  const selected = actualModels.value.find(
+    (row) => actualModelKey(row.provider, row.model) === key,
+  );
+  updateQuery({
+    provider: selected?.provider,
+    provider_model: selected?.model,
+    page: 1,
+  });
+}
 
 async function load(silent = false) {
   const pageNum = filters.value.page;
@@ -46,6 +75,8 @@ async function load(silent = false) {
       size: sizeNum,
       model: filters.value.model || undefined,
       status: filters.value.status || undefined,
+      provider: filters.value.provider || undefined,
+      provider_model: filters.value.providerModel || undefined,
     },
     silent,
   );
@@ -76,10 +107,22 @@ function closeDetail() {
 
 onMounted(() => {
   void load();
+  void getByRealModel().then((rows) => {
+    actualModels.value = rows;
+  }).catch(() => {
+    actualModels.value = [];
+  });
 });
 
 watch(
-  () => [route.query.page, route.query.size, route.query.model, route.query.status],
+  () => [
+    route.query.page,
+    route.query.size,
+    route.query.model,
+    route.query.status,
+    route.query.provider,
+    route.query.provider_model,
+  ],
   () => {
     void load();
   },
@@ -101,7 +144,13 @@ watch(
 
 const emptyKind = computed(() => {
   if (!page.value) return "loading";
-  if (page.value.total === 0 && (filters.value.model || filters.value.status)) {
+  if (
+    page.value.total === 0 &&
+    (filters.value.model ||
+      filters.value.status ||
+      filters.value.provider ||
+      filters.value.providerModel)
+  ) {
     return "filtered";
   }
   if (page.value.total === 0) return "empty";
@@ -137,6 +186,22 @@ const emptyKind = computed(() => {
           <option value="">全部</option>
           <option value="success">success</option>
           <option value="error">error</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>真实模型</label>
+        <select
+          :value="selectedActualModelKey"
+          @change="updateActualModelFilter(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">全部</option>
+          <option
+            v-for="row in actualModels"
+            :key="actualModelKey(row.provider, row.model)"
+            :value="actualModelKey(row.provider, row.model)"
+          >
+            {{ formatActualModel(row.provider, row.model) }}
+          </option>
         </select>
       </div>
       <div class="field">
@@ -187,7 +252,9 @@ const emptyKind = computed(() => {
                 {{ row.provider_name || "—" }}
                 <span v-if="row.attempt > 1" class="badge badge-warn">failover×{{ row.attempt }}</span>
               </td>
-              <td class="mono">{{ row.provider_model || "—" }}</td>
+              <td class="mono">
+                {{ formatActualModel(row.provider_name, row.provider_model) }}
+              </td>
               <td>
                 <span
                   class="badge"
@@ -255,7 +322,7 @@ const emptyKind = computed(() => {
 }
 .filters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
   padding: 0.9rem 1rem;
   margin: 1rem 0;

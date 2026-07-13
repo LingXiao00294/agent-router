@@ -26,6 +26,15 @@ export function formatTokens(n: number | null | undefined): string {
   return String(n);
 }
 
+/** Format a structured actual-model identity without parsing display text. */
+export function formatActualModel(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+): string {
+  if (!provider || !model) return "—";
+  return `${provider}/${model}`;
+}
+
 /** Format UTC ISO timestamp for display (local timezone). */
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "—";

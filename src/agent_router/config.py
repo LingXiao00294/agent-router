@@ -82,10 +82,10 @@ class ProviderConfig(BaseModel):
     max_queue: int = 0
     queue_wait_timeout: float = 30.0
     rate_limit_cooldown: float = 30.0
-    input_price_per_million: float = 0.0
-    output_price_per_million: float = 0.0
-    cache_read_price_per_million: float = 0.0
-    cache_write_price_per_million: float = 0.0
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    cache_read_price_per_million: float | None = None
+    cache_write_price_per_million: float | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -99,9 +99,9 @@ class ProviderConfig(BaseModel):
         "cache_write_price_per_million",
     )
     @classmethod
-    def non_negative_price(cls, v: float) -> float:
+    def non_negative_price(cls, v: float | None) -> float | None:
         """Validate that configured token prices are non-negative."""
-        if v < 0:
+        if v is not None and v < 0:
             raise ValueError("模型费用必须大于等于 0")
         return v
 
@@ -174,10 +174,10 @@ def _provider_config_from_def(
     name: str,
     model: str,
     priority: int,
-    input_price_per_million: float = 0.0,
-    output_price_per_million: float = 0.0,
-    cache_read_price_per_million: float = 0.0,
-    cache_write_price_per_million: float = 0.0,
+    input_price_per_million: float | None = None,
+    output_price_per_million: float | None = None,
+    cache_read_price_per_million: float | None = None,
+    cache_write_price_per_million: float | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
         type=pdef.type,
@@ -234,13 +234,13 @@ def _resolve_provider_refs(
                     name=provider_name,
                     model=ref["model"],
                     priority=ref["priority"],
-                    input_price_per_million=ref.get("input_price_per_million", 0.0),
-                    output_price_per_million=ref.get("output_price_per_million", 0.0),
+                    input_price_per_million=ref.get("input_price_per_million"),
+                    output_price_per_million=ref.get("output_price_per_million"),
                     cache_read_price_per_million=ref.get(
-                        "cache_read_price_per_million", 0.0
+                        "cache_read_price_per_million"
                     ),
                     cache_write_price_per_million=ref.get(
-                        "cache_write_price_per_million", 0.0
+                        "cache_write_price_per_million"
                     ),
                 )
             )

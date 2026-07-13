@@ -62,6 +62,15 @@ def _calculate_cost_usd(usage: Mapping[str, Any], outcome: Mapping[str, Any]) ->
     return round(total / 1_000_000, 10)
 
 
+def _price_from_outcome(outcome: Mapping[str, Any], key: str) -> float | None:
+    """Return one configured price without normalizing a missing value to zero."""
+    pricing = outcome.get("pricing")
+    if not isinstance(pricing, Mapping):
+        return None
+    value = pricing.get(key)
+    return float(value) if value is not None else None
+
+
 # 预取首字节最长等待：超时后仍先返回 SSE 响应头，避免代理因无头超时；
 # 快速失败（冷却/容量/全失败）仍可在超时内转成 HTTP 429/503/502。
 # 超时后的限流会变成流内 error（HTTP 200），属有意取舍。
@@ -253,6 +262,14 @@ def create_app(
                     output_tokens=usage.get("output_tokens"),
                     cache_read_tokens=usage.get("cache_read_input_tokens"),
                     cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                    input_price_per_million=_price_from_outcome(outcome, "input"),
+                    output_price_per_million=_price_from_outcome(outcome, "output"),
+                    cache_read_price_per_million=_price_from_outcome(
+                        outcome, "cache_read"
+                    ),
+                    cache_write_price_per_million=_price_from_outcome(
+                        outcome, "cache_write"
+                    ),
                     cost_usd=_calculate_cost_usd(usage, outcome),
                     failover_details=outcome.get("_failures"),
                 )
@@ -528,6 +545,10 @@ async def _stream_wrapper(
             output_tokens=usage.get("output_tokens"),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            input_price_per_million=_price_from_outcome(outcome, "input"),
+            output_price_per_million=_price_from_outcome(outcome, "output"),
+            cache_read_price_per_million=_price_from_outcome(outcome, "cache_read"),
+            cache_write_price_per_million=_price_from_outcome(outcome, "cache_write"),
             cost_usd=_calculate_cost_usd(usage, outcome),
             failover_details=outcome.get("_failures"),
         )

@@ -34,9 +34,16 @@ def create_metrics_router(store: CallStore) -> APIRouter:
         size: int = Query(default=50, ge=1, le=200),
         model: str | None = None,
         status: str | None = None,
+        provider: str | None = None,
+        provider_model: str | None = None,
     ):
         calls, total = await store.list_calls(
-            page=page, size=size, model=model, status=status
+            page=page,
+            size=size,
+            model=model,
+            status=status,
+            provider=provider,
+            provider_model=provider_model,
         )
         return {
             "data": calls,

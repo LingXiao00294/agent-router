@@ -9,6 +9,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 import type { ModelStatReal } from "@/api/types";
 import { useAppStore } from "@/stores/app";
+import { formatActualModel } from "@/utils/format";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
@@ -41,7 +42,7 @@ function render() {
     },
     yAxis: {
       type: "category",
-      data: rows.map((r) => r.model).reverse(),
+      data: rows.map((r) => formatActualModel(r.provider, r.model)).reverse(),
       axisLabel: {
         color: text,
         width: 120,

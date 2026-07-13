@@ -128,11 +128,11 @@ pinned_model = "glm-5.1"
 provider = "zai"
 model = "glm-5.1"
 priority = 1
-# 可选模型费用，单位 USD / 1M Token；不填按 0 计算
+# 可选模型费用，单位 USD / 1M Token；不填的快照为 NULL，计费时按 0
 input_price_per_million = 1.4
 output_price_per_million = 4.4
 cache_read_price_per_million = 0.26
-cache_write_price_per_million = 0  # 0 与留空等效，Dashboard 保存时会省略
+cache_write_price_per_million = 0  # 显式 0 会保留为 0，与未配置的 NULL 不同
 
 [[models.opus-router.providers]]
 provider = "deepseek"
@@ -142,7 +142,7 @@ priority = 2
 
 `${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。未设置时不会阻止 `serve` 启动，方便先打开 dashboard 修改配置；包含未解析 key 的 provider 在实际请求路由时会被跳过，全部 provider 都不可用时返回明确错误。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
 
-模型费用配置在每条真实模型引用上，分别对应输入、输出、缓存读取和缓存写入 Token。四项均可选，留空按 `0` 计算；请求完成后费用会按实际 Token 用量写入调用记录。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
+模型费用配置在每条真实模型引用上，分别对应输入、输出、缓存读取和缓存写入 Token。四项均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。每次成功调用都会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，四类价格快照保持 `NULL`。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
 
 ## API 端点
 
@@ -154,12 +154,22 @@ priority = 2
 | `GET` | `/api/metrics/summary` | 调用概览统计 |
 | `GET` | `/api/metrics/by-model` | 按虚拟模型分组统计 |
 | `GET` | `/api/metrics/by-provider` | 按 provider 分组统计 |
-| `GET` | `/api/metrics/by-real-model` | 按真实模型分组统计 |
+| `GET` | `/api/metrics/by-real-model` | 按 Provider + 真实模型复合分组统计，返回独立 `provider`、`model` 字段 |
 | `GET` | `/api/metrics/daily?days=30` | 每日调用趋势 |
-| `GET` | `/api/calls?page=1&size=50` | 分页查询调用记录 |
+| `GET` | `/api/calls?page=1&size=50` | 分页查询调用记录；可用 `provider`、`provider_model` 组合筛选真实模型 |
 | `GET` | `/api/calls/{id}` | 单次调用详情 |
 | `GET` | `/api/config` | 查看配置（api_key 脱敏） |
 | `PUT` | `/api/config` | 更新配置 |
+
+### 调用记录数据库兼容性
+
+本版本的 `calls` 表新增四类价格快照字段，不兼容缺少这些字段的旧 `calls.db`，也不会执行自动迁移。启动时若检测到旧 schema，服务会列出缺失字段并提示手动重建；程序不会删除、覆盖或修改原数据库。请先停止服务并备份或重命名旧文件，例如：
+
+```powershell
+Move-Item calls.db calls.db.pre-pricing.bak
+```
+
+之后重新运行 `uv run agent-router serve -c config.toml --db calls.db`，程序会创建完整的新数据库。需要保留的旧调用历史仍在备份文件中。
 
 ## Dashboard
 
@@ -174,6 +184,7 @@ bun run build     # 生产构建 → dashboard/dist/
 为防止误清空上游，Dashboard 保存配置时要求至少保留一个 provider 和一个虚拟模型；该限制不改变配置 API 或 TOML 格式。
 虚拟模型的 provider 引用可通过左侧拖拽把手排序，列表顺序即 failover 使用的 `priority` 顺序。
 每条模型引用可以展开配置输入、输出、缓存读取和缓存写入单价。Overview 的日趋势以多条折线展示四类 Token 用量，并通过右侧 USD 坐标轴展示折算成本。
+Overview 的真实模型图表和统计表、Calls 的筛选项、列表及调用详情都统一显示 `<provider>/<model>`；内部筛选与 API 始终使用独立的 Provider 和模型字段，不会从展示文本反向解析身份。调用详情同时显示四类价格快照，`—` 表示未配置，`$0.0000` 表示显式配置为零。
 Dashboard 顶栏以“故障转移”开关呈现路由模式：关闭时为指定模型模式（内部仍使用 `sticky`），开启时按优先级自动故障转移。路由默认使用指定模型模式；模型未设置有效 pin 时会默认选择第一优先级的有效模型引用。切换到指定模型模式前，每个虚拟模型都必须存在有效 pin，否则切换会失败并返回具体模型名称，原配置保持不变。
 
 ## 开发

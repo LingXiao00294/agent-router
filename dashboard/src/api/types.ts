@@ -23,6 +23,7 @@ export interface ModelStatVirtual {
 }
 
 export interface ModelStatReal {
+  provider: string;
   model: string;
   count: number;
   success_count: number;
@@ -75,6 +76,10 @@ export interface CallRecord {
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_write_tokens: number | null;
+  input_price_per_million: number | null;
+  output_price_per_million: number | null;
+  cache_read_price_per_million: number | null;
+  cache_write_price_per_million: number | null;
   cost_usd: number | null;
   failover_details: string | null;
 }

@@ -39,8 +39,8 @@ function asNullableFinite(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function optionalNonZeroPrice(value: number | undefined): number | undefined {
-  return value != null && Number.isFinite(value) && value > 0 ? value : undefined;
+function optionalPrice(value: number | undefined): number | undefined {
+  return value != null && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "warning", "error"];
@@ -229,10 +229,10 @@ export function buildPutPayload(
       provider: r.provider,
       model: r.model,
       priority: i + 1,
-      input_price_per_million: optionalNonZeroPrice(r.input_price_per_million),
-      output_price_per_million: optionalNonZeroPrice(r.output_price_per_million),
-      cache_read_price_per_million: optionalNonZeroPrice(r.cache_read_price_per_million),
-      cache_write_price_per_million: optionalNonZeroPrice(r.cache_write_price_per_million),
+      input_price_per_million: optionalPrice(r.input_price_per_million),
+      output_price_per_million: optionalPrice(r.output_price_per_million),
+      cache_read_price_per_million: optionalPrice(r.cache_read_price_per_million),
+      cache_write_price_per_million: optionalPrice(r.cache_write_price_per_million),
     }));
     if (providersList.length === 0) continue;
     let pinned_provider = m.pinned_provider ?? null;

@@ -126,7 +126,7 @@ model = "glm-5.1"
 priority = 2
 ```
 
-配置在启动时加载，也可通过 Dashboard 保存并热重载。模型费用均可省略，省略时按 0 计算。
+配置在启动时加载，也可通过 Dashboard 保存并热重载。模型费用均可省略：省略值在运行时保持 `None`，写入调用快照时为 SQLite `NULL`，只在计算费用时按 0；显式配置 0 则保留为数值 0。
 
 ---
 
@@ -146,11 +146,16 @@ priority = 2
 ```python
 class ProviderConfig(BaseModel):
     type: Literal["anthropic", "openai"]
+    name: str             # Provider 配置名
     model: str
     api_key: str            # 插值后的实际 key
     base_url: str
     priority: int
     timeout_seconds: float = 120.0
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    cache_read_price_per_million: float | None = None
+    cache_write_price_per_million: float | None = None
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
@@ -365,6 +370,7 @@ CREATE TABLE IF NOT EXISTS calls (
     id              TEXT PRIMARY KEY,        -- UUID, 请求唯一标识
     timestamp       TEXT NOT NULL,           -- ISO 8601 时间戳
     virtual_model   TEXT NOT NULL,           -- 虚拟模型名 (如 "haiku-router")
+    provider_name   TEXT,                    -- Provider 配置名 (如 "anthropic")
     provider_type   TEXT,                    -- 最终成功的 provider 类型 (anthropic/openai)
     provider_model  TEXT,                    -- 真实模型名 (如 "claude-haiku-4-5")
     provider_url    TEXT,                    -- 实际调用的 API 端点
@@ -387,8 +393,15 @@ CREATE TABLE IF NOT EXISTS calls (
     cache_read_tokens   INTEGER,            -- Anthropic cache 读取
     cache_write_tokens  INTEGER,            -- Anthropic cache 写入
 
-    -- 费用估算 (USD, 按各 provider 公开价格计算)
-    cost_usd        REAL
+    -- 最终成功模型的价格快照 (USD / 1M Token；未配置为 NULL)
+    input_price_per_million        REAL,
+    output_price_per_million       REAL,
+    cache_read_price_per_million   REAL,
+    cache_write_price_per_million  REAL,
+
+    -- 按上述快照与 Token 用量计算的最终费用
+    cost_usd        REAL,
+    failover_details TEXT                  -- 失败尝试链 JSON
 );
 
 CREATE INDEX IF NOT EXISTS idx_calls_timestamp ON calls(timestamp DESC);
@@ -396,7 +409,14 @@ CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(virtual_model);
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 ```
 
-**写入时机：** 每次请求完成后（成功或失败），异步写入 SQLite，不阻塞主请求流程。
+**写入语义：**
+
+- 非流式与流式请求都在最终 Provider 成功后写入其结构化 `provider_name`、`provider_model` 和四类价格快照；首选失败后的 failover 使用最终成功模型的数据。
+- `cost_usd = Σ(token_count × (price_snapshot or 0)) / 1_000_000`。未配置价格的快照保持 `NULL`，只在公式中按 0；显式价格 0 保持为 0。
+- 没有实际成功模型的失败调用不写入价格，四类字段保持 `NULL`。
+- 价格是调用发生时的快照；修改当前配置只影响后续调用，不回写历史记录。
+
+**Schema 兼容性：** 当前版本不兼容缺少价格快照字段的旧数据库，也不提供增量迁移。`CallStore` 在执行任何 DDL 前通过只读连接检查现有 `calls` 表；不兼容时列出缺失字段并要求开发者备份后手动重命名或删除旧库。检测失败不会修改或覆盖原文件。
 
 ### 8. api/metrics.py — 数据查询 API
 
@@ -406,8 +426,9 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 |---|---|---|
 | `GET` | `/api/metrics/summary` | 概览统计 (总调用数、成功率、总 token、总费用) |
 | `GET` | `/api/metrics/by-model` | 按虚拟模型分组统计 |
+| `GET` | `/api/metrics/by-real-model` | 按 `(provider_name, provider_model)` 复合分组，返回独立 `provider`、`model` 字段 |
 | `GET` | `/api/metrics/by-provider` | 按 provider 分组统计 |
-| `GET` | `/api/calls?page=1&size=50` | 分页查询调用列表 |
+| `GET` | `/api/calls?page=1&size=50` | 分页查询调用列表，可按独立 `provider`、`provider_model` 字段筛选 |
 | `GET` | `/api/calls/{id}` | 单次调用详情 (含完整 request/response) |
 | `GET` | `/api/metrics/daily` | 每日调用、四类 Token 与折算成本趋势 |
 
@@ -455,10 +476,8 @@ Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
 │  调用趋势 (折线图)                                    │
 │  ▁▂▄▆▇▇▆▅▃▂▁▂▃▅▆▇▇▆▅▄▃▂▁▂▃▄▅▆▇                    │
 ├─────────────────────────────────────────────────────┤
-│  模型分布 (饼图)       │  Provider分布 (饼图)          │
-│  haiku-router 60%     │  anthropic 70%              │
-│  sonnet-router 30%    │  openai 20%                 │
-│  opus-router 10%      │  zhipu 10%                  │
+│  真实模型分布与统计                                      │
+│  anthropic/claude-haiku 60% · zai/glm-5.1 40%         │
 ├─────────────────────────────────────────────────────┤
 │  最近调用列表                                        │
 │  时间 │ 模型 │ Provider │ 状态 │ 延迟 │ Token │ 费用  │
@@ -469,7 +488,9 @@ Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
 
 **技术栈：** Vue 3 + TypeScript + Vite + ECharts (图表) + Tailwind CSS
 
-dashboard 作为独立目录，后期完善。初期可以先只做 API 接口，用 curl 直接查数据。
+dashboard 作为独立 Vue 目录构建，由独立面板服务代理 router 的 `/api/*` 与 `/v1/*` 请求。
+
+真实模型图表、统计表、Calls 筛选项和调用详情统一通过 `formatActualModel(provider, model)` 生成 `<provider>/<model>`。Provider 与模型在 API、store 和筛选查询中始终是独立字段，展示字符串不参与身份解析。调用详情额外展示四类价格快照，以区分未配置 (`NULL`) 与显式 0。
 
 ---
 
