@@ -233,8 +233,7 @@ const emptyKind = computed(() => {
             <tr>
               <th>时间</th>
               <th>虚拟模型</th>
-              <th>Provider</th>
-              <th>真实模型</th>
+              <th class="col-model">真实模型</th>
               <th>状态</th>
               <th>延迟</th>
               <th>Token</th>
@@ -250,20 +249,21 @@ const emptyKind = computed(() => {
             >
               <td class="mono">{{ formatTime(row.timestamp) }}</td>
               <td class="mono">{{ row.virtual_model }}</td>
-              <td class="mono">
-                {{ row.provider_name || "—" }}
-                <span v-if="row.attempt > 1" class="badge badge-warn">failover×{{ row.attempt }}</span>
-              </td>
-              <td class="mono">
+              <td class="mono col-model">
                 {{ formatActualModel(row.provider_name, row.provider_model) }}
               </td>
               <td>
-                <span
-                  class="badge"
-                  :class="row.status === 'success' ? 'badge-success' : 'badge-danger'"
-                >
-                  {{ row.status }}
-                </span>
+                <div class="status-cell">
+                  <span
+                    class="badge"
+                    :class="row.status === 'success' ? 'badge-success' : 'badge-danger'"
+                  >
+                    {{ row.status }}
+                  </span>
+                  <span v-if="row.attempt > 1" class="badge badge-warn">
+                    failover×{{ row.attempt }}
+                  </span>
+                </div>
               </td>
               <td class="mono">{{ formatLatency(row.latency_ms) }}</td>
               <td class="mono">
@@ -345,8 +345,16 @@ const emptyKind = computed(() => {
   display: flex;
   gap: 0.4rem;
 }
-.badge {
-  margin-left: 0.35rem;
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+table.data .col-model {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 800px) {
   .filters {
