@@ -18,6 +18,8 @@ export const useCallsStore = defineStore("calls", () => {
       size?: number;
       model?: string;
       status?: string;
+      provider?: string;
+      provider_model?: string;
     },
     silent = false,
   ) {

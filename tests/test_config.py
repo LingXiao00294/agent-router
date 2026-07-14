@@ -53,6 +53,44 @@ cache_write_price_per_million = 1.25
         path.unlink(missing_ok=True)
 
 
+def test_model_token_prices_preserve_missing_and_explicit_zero():
+    toml = """
+[providers.p1]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://test.api.com"
+
+[[models.test]]
+provider = "p1"
+model = "missing-prices"
+priority = 1
+
+[[models.test]]
+provider = "p1"
+model = "zero-prices"
+priority = 2
+input_price_per_million = 0
+output_price_per_million = 0
+cache_read_price_per_million = 0
+cache_write_price_per_million = 0
+"""
+    path = _write_toml(toml)
+    try:
+        config = load_config(path)
+        missing, zero = config.models["test"].providers
+
+        assert missing.input_price_per_million is None
+        assert missing.output_price_per_million is None
+        assert missing.cache_read_price_per_million is None
+        assert missing.cache_write_price_per_million is None
+        assert zero.input_price_per_million == 0.0
+        assert zero.output_price_per_million == 0.0
+        assert zero.cache_read_price_per_million == 0.0
+        assert zero.cache_write_price_per_million == 0.0
+    finally:
+        path.unlink(missing_ok=True)
+
+
 class TestLoadConfig:
     def test_basic_config(self):
         toml = """

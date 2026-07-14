@@ -42,7 +42,8 @@ pinned_model = "mimo-v2.5-pro"
 provider = "mimo token plan"
 model = "mimo-v2.5-pro"
 priority = 1
-# 可选，单位 USD / 1M Token；省略或设为 0 时不计费
+# 可选，单位 USD / 1M Token；省略时快照为 NULL，显式 0 时快照保留 0
+# 两种情况在费用计算时都按 0，但历史记录可区分
 # input_price_per_million = 0
 # output_price_per_million = 0
 # cache_read_price_per_million = 0

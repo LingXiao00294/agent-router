@@ -48,12 +48,16 @@ export function getCalls(params: {
   size?: number;
   model?: string;
   status?: string;
+  provider?: string;
+  provider_model?: string;
 } = {}) {
   const q = new URLSearchParams();
   q.set("page", String(params.page ?? 1));
   q.set("size", String(params.size ?? 50));
   if (params.model) q.set("model", params.model);
   if (params.status) q.set("status", params.status);
+  if (params.provider) q.set("provider", params.provider);
+  if (params.provider_model) q.set("provider_model", params.provider_model);
   return request<CallsPage>(`/api/calls?${q}`);
 }
 

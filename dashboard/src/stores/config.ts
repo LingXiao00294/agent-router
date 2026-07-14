@@ -198,7 +198,7 @@ export const useConfigStore = defineStore("config", () => {
           r.cache_write_price_per_million,
         ];
         if (prices.some((price) => price != null && (!Number.isFinite(price) || price < 0))) {
-          errs[`models.${name}.ref.${i}.price`] = "费用需为 ≥ 0 的数字，留空按 0 计算";
+          errs[`models.${name}.ref.${i}.price`] = "费用需为 ≥ 0 的数字，留空则快照为 NULL";
         }
       });
       if (draft.value.router.mode === "sticky") {

@@ -302,7 +302,8 @@ class Router:
     ) -> dict:
         """非流式路由: 返回第一个成功 provider 的响应 JSON.
 
-        outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
+        outcome 可选字典，成功时会写入最终 provider、模型、尝试次数、URL，
+        以及保留未配置 ``None`` 值的价格信息。
         """
         virtual_model = request_body.get("model", "")
         allow_failover = self.config.router.mode == "failover"
@@ -409,7 +410,8 @@ class Router:
     ) -> AsyncGenerator[bytes, None]:
         """流式路由: 返回第一个成功 provider 的 SSE 流.
 
-        outcome 可选字典，成功时会写入 provider_type, provider_model, attempt, base_url.
+        outcome 可选字典，成功时会写入最终 provider、模型、尝试次数、URL，
+        以及保留未配置 ``None`` 值的价格信息。
         """
         virtual_model = request_body.get("model", "")
         allow_failover = self.config.router.mode == "failover"

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { CallRecord } from "@/api/types";
 import {
+  formatActualModel,
   formatLatency,
   formatTime,
   formatTokens,
@@ -61,7 +62,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <div><span class="k">时间</span><span class="mono">{{ formatTime(record.timestamp) }}</span></div>
             <div><span class="k">虚拟模型</span><span class="mono">{{ record.virtual_model }}</span></div>
             <div><span class="k">Provider</span><span class="mono">{{ record.provider_name || "—" }} ({{ record.provider_type || "—" }})</span></div>
-            <div><span class="k">真实模型</span><span class="mono">{{ record.provider_model || "—" }}</span></div>
+            <div><span class="k">真实模型</span><span class="mono">{{ formatActualModel(record.provider_name, record.provider_model) }}</span></div>
             <div><span class="k">URL</span><span class="mono wrap">{{ record.provider_url || "—" }}</span></div>
             <div><span class="k">Attempt</span><span class="mono">{{ record.attempt }}</span></div>
             <div><span class="k">状态</span>
@@ -75,6 +76,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <div><span class="k">费用</span><span class="mono">{{ formatUsd(record.cost_usd) }}</span></div>
           </section>
 
+          <section v-if="record.provider_model" class="block">
+            <h3>价格快照 <span class="muted">(USD / 1M Token)</span></h3>
+            <div class="price-grid">
+              <div><span class="k">输入</span><span class="mono">{{ formatUsd(record.input_price_per_million) }}</span></div>
+              <div><span class="k">输出</span><span class="mono">{{ formatUsd(record.output_price_per_million) }}</span></div>
+              <div><span class="k">缓存读取</span><span class="mono">{{ formatUsd(record.cache_read_price_per_million) }}</span></div>
+              <div><span class="k">缓存写入</span><span class="mono">{{ formatUsd(record.cache_write_price_per_million) }}</span></div>
+            </div>
+          </section>
+
           <section v-if="record.error_type || record.error_message" class="block">
             <h3>错误</h3>
             <p class="mono">{{ record.error_type }} — {{ record.error_message }}</p>
@@ -85,14 +96,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <ol v-if="failover.length" class="chain">
               <li v-for="(f, i) in failover" :key="i">
                 <span class="badge badge-danger">fail</span>
-                <span class="mono">{{ f.provider }} / {{ f.model }}</span>
+                <span class="mono">{{ formatActualModel(f.provider, f.model) }}</span>
                 <span class="muted">{{ f.error }}</span>
                 <span v-if="f.latency_ms != null" class="mono muted">{{ f.latency_ms }}ms</span>
               </li>
             </ol>
             <div v-if="record.status === 'success' && record.provider_name" class="chain-ok">
               <span class="badge badge-success">hit</span>
-              <span class="mono">{{ record.provider_name }} / {{ record.provider_model }}</span>
+              <span class="mono">{{ formatActualModel(record.provider_name, record.provider_model) }}</span>
             </div>
           </section>
 
@@ -185,6 +196,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .block h3 {
   margin: 0 0 0.5rem;
   font-size: 0.9rem;
+}
+.block h3 .muted {
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.price-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 1rem;
+}
+.price-grid > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 .chain {
   margin: 0;

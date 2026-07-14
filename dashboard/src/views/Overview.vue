@@ -8,6 +8,7 @@ import StatsCards from "@/components/StatsCards.vue";
 import TrendChart from "@/components/TrendChart.vue";
 import ModelChart from "@/components/ModelChart.vue";
 import {
+  formatActualModel,
   formatNumber,
   formatTokens,
   formatUsd,
@@ -90,6 +91,36 @@ useAutoRefresh(async () => {
             <h2 class="panel-title">真实模型分布</h2>
           </div>
           <ModelChart :data="byRealModel" />
+          <div v-if="byRealModel.length" class="table-wrap real-model-stats">
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>真实模型</th>
+                  <th>调用</th>
+                  <th>成功</th>
+                  <th>Token</th>
+                  <th>费用</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in byRealModel"
+                  :key="`${row.provider}\u0000${row.model}`"
+                >
+                  <td class="mono">
+                    {{ formatActualModel(row.provider, row.model) }}
+                  </td>
+                  <td class="mono">{{ formatNumber(row.count) }}</td>
+                  <td class="mono">{{ formatNumber(row.success_count) }}</td>
+                  <td class="mono">
+                    {{ formatTokens(row.total_input_tokens) }} /
+                    {{ formatTokens(row.total_output_tokens) }}
+                  </td>
+                  <td class="mono">{{ formatUsd(row.total_cost_usd) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
       </div>
 
@@ -208,6 +239,12 @@ useAutoRefresh(async () => {
 
 .chart-panel {
   min-height: 320px;
+}
+
+.real-model-stats {
+  max-height: 280px;
+  margin-top: 0.75rem;
+  overflow: auto;
 }
 
 .trend-panel,

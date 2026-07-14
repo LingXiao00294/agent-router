@@ -243,8 +243,8 @@ class TestRateLimitRouting:
             assert outcome["pricing"] == {
                 "input": 1.0,
                 "output": 4.0,
-                "cache_read": 0.0,
-                "cache_write": 0.0,
+                "cache_read": None,
+                "cache_write": None,
             }
             # p1 未熔断
             from agent_router.circuit_breaker import CircuitState

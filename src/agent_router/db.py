@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS calls (
     output_tokens   INTEGER,
     cache_read_tokens   INTEGER,
     cache_write_tokens  INTEGER,
+    input_price_per_million        REAL,
+    output_price_per_million       REAL,
+    cache_read_price_per_million   REAL,
+    cache_write_price_per_million  REAL,
     cost_usd        REAL,
     failover_details TEXT
 );
@@ -39,7 +43,42 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS idx_calls_timestamp ON calls(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(virtual_model);
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
+CREATE INDEX IF NOT EXISTS idx_calls_provider ON calls(provider_name, provider_model);
 """
+
+CALL_SCHEMA_COLUMNS = frozenset(
+    {
+        "id",
+        "timestamp",
+        "virtual_model",
+        "provider_name",
+        "provider_type",
+        "provider_model",
+        "provider_url",
+        "attempt",
+        "latency_ms",
+        "request_body",
+        "request_tokens",
+        "status",
+        "error_type",
+        "error_message",
+        "response_body",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "input_price_per_million",
+        "output_price_per_million",
+        "cache_read_price_per_million",
+        "cache_write_price_per_million",
+        "cost_usd",
+        "failover_details",
+    }
+)
+
+
+class IncompatibleDatabaseError(RuntimeError):
+    """Indicate that an existing calls database needs manual replacement."""
 
 
 class CallStore:
@@ -54,18 +93,58 @@ class CallStore:
         return self._conn
 
     async def init(self) -> None:
-        self._conn = await aiosqlite.connect(str(self.db_path))
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.executescript(SCHEMA)
-        # Migration: add failover_details column if missing (pre-existing DBs)
+        """Open the database after validating any existing calls schema.
+
+        Existing databases are inspected through a read-only connection first. A
+        schema mismatch is never migrated or overwritten automatically.
+
+        Raises:
+            IncompatibleDatabaseError: If the existing ``calls`` table is missing
+                fields required by this version.
+        """
+        if self._conn is not None:
+            return
+
+        if self.db_path != Path(":memory:") and self.db_path.exists():
+            await self._validate_existing_schema()
+
+        conn = await aiosqlite.connect(str(self.db_path))
         try:
-            await self._conn.execute(
-                "ALTER TABLE calls ADD COLUMN failover_details TEXT"
-            )
-        except aiosqlite.OperationalError:
-            pass  # column already exists
-        await self._conn.commit()
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(SCHEMA)
+            await conn.commit()
+        except Exception:
+            await conn.close()
+            raise
+
+        self._conn = conn
         logger.info("db.init", path=str(self.db_path))
+
+    async def _validate_existing_schema(self) -> None:
+        """Reject an incompatible database without opening it for writes."""
+        uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+        conn = await aiosqlite.connect(uri, uri=True)
+        try:
+            table = await conn.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("calls",),
+            )
+            if not table:
+                return
+            rows = await conn.execute_fetchall("PRAGMA table_info(calls)")
+        finally:
+            await conn.close()
+
+        existing_columns = {str(row[1]) for row in rows}
+        missing_columns = sorted(CALL_SCHEMA_COLUMNS - existing_columns)
+        if missing_columns:
+            missing = ", ".join(missing_columns)
+            raise IncompatibleDatabaseError(
+                "调用记录数据库 schema 与当前版本不兼容，"
+                f"缺少字段: {missing}。请停止服务，备份后手动删除或重命名 "
+                f"'{self.db_path}'，再重新启动以创建新数据库；"
+                "程序未修改现有数据库。"
+            )
 
     async def close(self) -> None:
         if self._conn:
@@ -91,9 +170,18 @@ class CallStore:
         output_tokens: int | None = None,
         cache_read_tokens: int | None = None,
         cache_write_tokens: int | None = None,
+        input_price_per_million: float | None = None,
+        output_price_per_million: float | None = None,
+        cache_read_price_per_million: float | None = None,
+        cache_write_price_per_million: float | None = None,
         cost_usd: float | None = None,
         failover_details: list[dict] | None = None,
     ) -> str:
+        """Persist one call and return its generated identifier.
+
+        Price arguments are snapshots of the final successful provider model.
+        Callers leave them as ``None`` when no model completed successfully.
+        """
         call_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
@@ -116,9 +204,14 @@ class CallStore:
                 id, timestamp, virtual_model, provider_name, provider_type, provider_model,
                 provider_url, attempt, latency_ms, request_body, request_tokens,
                 status, error_type, error_message, response_body,
-                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                input_price_per_million, output_price_per_million,
+                cache_read_price_per_million, cache_write_price_per_million, cost_usd,
                 failover_details
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?
+            )""",
             (
                 call_id,
                 now,
@@ -139,6 +232,10 @@ class CallStore:
                 output_tokens,
                 cache_read_tokens,
                 cache_write_tokens,
+                input_price_per_million,
+                output_price_per_million,
+                cache_read_price_per_million,
+                cache_write_price_per_million,
                 cost_usd,
                 fo_json,
             ),
@@ -159,6 +256,8 @@ class CallStore:
         size: int = 50,
         model: str | None = None,
         status: str | None = None,
+        provider: str | None = None,
+        provider_model: str | None = None,
     ) -> tuple[list[dict], int]:
         conditions: list[str] = []
         params: list[Any] = []
@@ -168,6 +267,12 @@ class CallStore:
         if status:
             conditions.append("status = ?")
             params.append(status)
+        if provider:
+            conditions.append("provider_name = ?")
+            params.append(provider)
+        if provider_model:
+            conditions.append("provider_model = ?")
+            params.append(provider_model)
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -242,14 +347,17 @@ class CallStore:
     async def by_real_model(self) -> list[dict]:
         rows = await self.conn.execute_fetchall(
             """SELECT
-                COALESCE(provider_model, 'unknown') AS model,
+                provider_name AS provider,
+                provider_model AS model,
                 COUNT(*) AS count,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
                 SUM(input_tokens) AS total_input_tokens,
                 SUM(output_tokens) AS total_output_tokens,
                 SUM(cost_usd) AS total_cost_usd
-            FROM calls WHERE provider_model IS NOT NULL
-            GROUP BY provider_model"""
+            FROM calls
+            WHERE provider_name IS NOT NULL AND provider_model IS NOT NULL
+            GROUP BY provider_name, provider_model
+            ORDER BY count DESC, provider_name, provider_model"""
         )
         return [dict(r) for r in rows]
 

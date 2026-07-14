@@ -3,8 +3,10 @@ import { computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useCallsStore } from "@/stores/calls";
+import { useMetricsStore } from "@/stores/metrics";
 import CallDetail from "@/components/CallDetail.vue";
 import {
+  formatActualModel,
   formatLatency,
   formatNumber,
   formatTime,
@@ -18,13 +20,40 @@ const store = useCallsStore();
 const route = useRoute();
 const router = useRouter();
 const { page, loading, error, detail } = storeToRefs(store);
+const metrics = useMetricsStore();
+const { byRealModel: actualModels } = storeToRefs(metrics);
 
 const filters = computed(() => ({
   page: parsePositiveInt(route.query.page, 1),
   size: parsePositiveInt(route.query.size, 50, 200),
   model: typeof route.query.model === "string" ? route.query.model : "",
   status: typeof route.query.status === "string" ? route.query.status : "",
+  provider: typeof route.query.provider === "string" ? route.query.provider : "",
+  providerModel:
+    typeof route.query.provider_model === "string"
+      ? route.query.provider_model
+      : "",
 }));
+
+function actualModelKey(provider: string, model: string): string {
+  return JSON.stringify([provider, model]);
+}
+
+const selectedActualModelKey = computed(() => {
+  if (!filters.value.provider || !filters.value.providerModel) return "";
+  return actualModelKey(filters.value.provider, filters.value.providerModel);
+});
+
+function updateActualModelFilter(key: string) {
+  const selected = actualModels.value.find(
+    (row) => actualModelKey(row.provider, row.model) === key,
+  );
+  updateQuery({
+    provider: selected?.provider,
+    provider_model: selected?.model,
+    page: 1,
+  });
+}
 
 async function load(silent = false) {
   const pageNum = filters.value.page;
@@ -46,6 +75,8 @@ async function load(silent = false) {
       size: sizeNum,
       model: filters.value.model || undefined,
       status: filters.value.status || undefined,
+      provider: filters.value.provider || undefined,
+      provider_model: filters.value.providerModel || undefined,
     },
     silent,
   );
@@ -76,10 +107,18 @@ function closeDetail() {
 
 onMounted(() => {
   void load();
+  if (!metrics.loadedOnce) void metrics.refresh(true).catch(() => {});
 });
 
 watch(
-  () => [route.query.page, route.query.size, route.query.model, route.query.status],
+  () => [
+    route.query.page,
+    route.query.size,
+    route.query.model,
+    route.query.status,
+    route.query.provider,
+    route.query.provider_model,
+  ],
   () => {
     void load();
   },
@@ -101,7 +140,13 @@ watch(
 
 const emptyKind = computed(() => {
   if (!page.value) return "loading";
-  if (page.value.total === 0 && (filters.value.model || filters.value.status)) {
+  if (
+    page.value.total === 0 &&
+    (filters.value.model ||
+      filters.value.status ||
+      filters.value.provider ||
+      filters.value.providerModel)
+  ) {
     return "filtered";
   }
   if (page.value.total === 0) return "empty";
@@ -140,6 +185,28 @@ const emptyKind = computed(() => {
         </select>
       </div>
       <div class="field">
+        <label>真实模型</label>
+        <select
+          :value="selectedActualModelKey"
+          @change="updateActualModelFilter(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">全部</option>
+          <option
+            v-if="selectedActualModelKey && !actualModels.some((r) => actualModelKey(r.provider, r.model) === selectedActualModelKey)"
+            :value="selectedActualModelKey"
+          >
+            {{ formatActualModel(filters.provider, filters.providerModel) }}
+          </option>
+          <option
+            v-for="row in actualModels"
+            :key="actualModelKey(row.provider, row.model)"
+            :value="actualModelKey(row.provider, row.model)"
+          >
+            {{ formatActualModel(row.provider, row.model) }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
         <label>每页</label>
         <select
           :value="filters.size"
@@ -166,8 +233,7 @@ const emptyKind = computed(() => {
             <tr>
               <th>时间</th>
               <th>虚拟模型</th>
-              <th>Provider</th>
-              <th>真实模型</th>
+              <th class="col-model">真实模型</th>
               <th>状态</th>
               <th>延迟</th>
               <th>Token</th>
@@ -183,18 +249,21 @@ const emptyKind = computed(() => {
             >
               <td class="mono">{{ formatTime(row.timestamp) }}</td>
               <td class="mono">{{ row.virtual_model }}</td>
-              <td class="mono">
-                {{ row.provider_name || "—" }}
-                <span v-if="row.attempt > 1" class="badge badge-warn">failover×{{ row.attempt }}</span>
+              <td class="mono col-model">
+                {{ formatActualModel(row.provider_name, row.provider_model) }}
               </td>
-              <td class="mono">{{ row.provider_model || "—" }}</td>
               <td>
-                <span
-                  class="badge"
-                  :class="row.status === 'success' ? 'badge-success' : 'badge-danger'"
-                >
-                  {{ row.status }}
-                </span>
+                <div class="status-cell">
+                  <span
+                    class="badge"
+                    :class="row.status === 'success' ? 'badge-success' : 'badge-danger'"
+                  >
+                    {{ row.status }}
+                  </span>
+                  <span v-if="row.attempt > 1" class="badge badge-warn">
+                    failover×{{ row.attempt }}
+                  </span>
+                </div>
               </td>
               <td class="mono">{{ formatLatency(row.latency_ms) }}</td>
               <td class="mono">
@@ -255,7 +324,7 @@ const emptyKind = computed(() => {
 }
 .filters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
   padding: 0.9rem 1rem;
   margin: 1rem 0;
@@ -276,8 +345,16 @@ const emptyKind = computed(() => {
   display: flex;
   gap: 0.4rem;
 }
-.badge {
-  margin-left: 0.35rem;
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+table.data .col-model {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 800px) {
   .filters {
