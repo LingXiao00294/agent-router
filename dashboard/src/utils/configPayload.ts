@@ -1,7 +1,7 @@
 import type {
+  ActualModelConfig,
   AppConfig,
   LogLevel,
-  ModelRef,
   ProviderConfig,
   ProviderType,
   RouterConfig,
@@ -29,57 +29,76 @@ export function emptyRouter(): RouterConfig {
 }
 
 function asFinite(value: unknown, fallback: number): number {
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(n) ? n : fallback;
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function asNullableFinite(value: unknown): number | null {
   if (value == null || value === "") return null;
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(n) ? n : null;
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
-function optionalPrice(value: number | undefined): number | undefined {
-  return value != null && Number.isFinite(value) && value >= 0 ? value : undefined;
+function optionalPrice(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return value != null && value !== "" && Number.isFinite(number) && number >= 0
+    ? number
+    : undefined;
+}
+
+function normalizeActualModel(raw: unknown): ActualModelConfig {
+  const model = (raw ?? {}) as Record<string, unknown>;
+  return {
+    input_price_per_million: optionalPrice(model.input_price_per_million),
+    output_price_per_million: optionalPrice(model.output_price_per_million),
+    cache_read_price_per_million: optionalPrice(model.cache_read_price_per_million),
+    cache_write_price_per_million: optionalPrice(model.cache_write_price_per_million),
+  };
 }
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "warning", "error"];
 
-/** Fill omitted provider fields with ProviderDef defaults. */
+/** Fill omitted provider and actual-model fields with their backend defaults. */
 export function normalizeProviderConfig(
   raw: Partial<ProviderConfig> | Record<string, unknown> | null | undefined,
 ): ProviderConfig {
-  const r = (raw ?? {}) as Record<string, unknown>;
-  const type: ProviderType = r.type === "openai" ? "openai" : "anthropic";
+  const provider = (raw ?? {}) as Record<string, unknown>;
+  const type: ProviderType = provider.type === "openai" ? "openai" : "anthropic";
+  const rawModels =
+    provider.models && typeof provider.models === "object"
+      ? (provider.models as Record<string, unknown>)
+      : {};
+  const models: Record<string, ActualModelConfig> = {};
+  for (const [name, model] of Object.entries(rawModels)) {
+    models[name] = normalizeActualModel(model);
+  }
   return {
     type,
-    api_key: typeof r.api_key === "string" ? r.api_key : "",
-    base_url: typeof r.base_url === "string" ? r.base_url : "",
-    timeout_seconds: asFinite(r.timeout_seconds, 120),
-    failure_threshold: asNullableFinite(r.failure_threshold),
-    recovery_timeout: asNullableFinite(r.recovery_timeout),
-    max_concurrent: asFinite(r.max_concurrent, 0),
-    max_queue: asFinite(r.max_queue, 0),
-    queue_wait_timeout: asFinite(r.queue_wait_timeout, 30),
-    rate_limit_cooldown: asFinite(r.rate_limit_cooldown, 30),
-    has_key: Boolean(r.has_key),
-    api_key_unresolved: Boolean(r.api_key_unresolved),
+    api_key: typeof provider.api_key === "string" ? provider.api_key : "",
+    base_url: typeof provider.base_url === "string" ? provider.base_url : "",
+    timeout_seconds: asFinite(provider.timeout_seconds, 120),
+    failure_threshold: asNullableFinite(provider.failure_threshold),
+    recovery_timeout: asNullableFinite(provider.recovery_timeout),
+    max_concurrent: asFinite(provider.max_concurrent, 0),
+    max_queue: asFinite(provider.max_queue, 0),
+    queue_wait_timeout: asFinite(provider.queue_wait_timeout, 30),
+    rate_limit_cooldown: asFinite(provider.rate_limit_cooldown, 30),
+    has_key: Boolean(provider.has_key),
+    api_key_unresolved: Boolean(provider.api_key_unresolved),
+    models,
   };
 }
 
-/**
- * Normalize GET /api/config raw TOML into a complete AppConfig.
- * Backend may omit [router]/[providers] and many default fields.
- */
+/** Normalize GET /api/config into the complete dashboard configuration shape. */
 export function normalizeAppConfig(
   raw: Partial<AppConfig> | Record<string, unknown> | null | undefined,
 ): AppConfig {
-  const src = (raw ?? {}) as Partial<AppConfig> & Record<string, unknown>;
-  const serverIn = (src.server ?? {}) as Partial<ServerConfig>;
-  const routerIn = (src.router ?? {}) as Partial<RouterConfig>;
+  const source = (raw ?? {}) as Partial<AppConfig> & Record<string, unknown>;
+  const serverIn = (source.server ?? {}) as Partial<ServerConfig>;
+  const routerIn = (source.router ?? {}) as Partial<RouterConfig>;
   const providersIn =
-    src.providers && typeof src.providers === "object"
-      ? (src.providers as Record<string, Partial<ProviderConfig>>)
+    source.providers && typeof source.providers === "object"
+      ? (source.providers as Record<string, Partial<ProviderConfig>>)
       : {};
 
   const logLevel = serverIn.log_level;
@@ -107,40 +126,35 @@ export function normalizeAppConfig(
   };
 
   const providers: Record<string, ProviderConfig> = {};
-  for (const [name, pdata] of Object.entries(providersIn)) {
-    providers[name] = normalizeProviderConfig(pdata);
+  for (const [name, provider] of Object.entries(providersIn)) {
+    providers[name] = normalizeProviderConfig(provider);
   }
 
   return {
     server,
     router,
     providers,
-    models: (src.models as AppConfig["models"]) ?? {},
+    models: normalizeModels(source.models as AppConfig["models"]),
   };
 }
 
-/** Empty / placeholder / all-stars — always preserve server-side key. */
+/** Empty / placeholder / all-stars values always preserve the server-side key. */
 export function isBlankOrPlaceholderKey(key: string): boolean {
   return !key || key === "${PLACEHOLDER}" || /^\*+$/.test(key);
 }
 
-/**
- * Matches backend `_is_key_masked` shape (empty, placeholder, all-stars,
- * or prefix4 + stars + suffix4). Such values are never accepted as a new secret.
- */
+/** Return whether a value has the backend's masked API-key shape. */
 export function isBackendMaskedShape(key: string): boolean {
   if (isBlankOrPlaceholderKey(key)) return true;
   if (key.length > 8) {
-    const mid = key.slice(4, -4);
-    if (mid.length > 0 && [...mid].every((c) => c === "*")) return true;
+    const middle = key.slice(4, -4);
+    if (middle.length > 0 && [...middle].every((character) => character === "*")) {
+      return true;
+    }
   }
   return false;
 }
 
-/**
- * Preserve existing api_key when blank/placeholder, equal to the GET masked
- * value, or otherwise matching backend masked shape (never treat as a new key).
- */
 export function shouldPreserveApiKey(
   name: string,
   apiKey: string,
@@ -159,50 +173,28 @@ export function shouldPreserveApiKey(
 export function captureMaskedApiKeys(
   providers: Record<string, ProviderConfig>,
 ): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [name, p] of Object.entries(providers)) {
-    out[name] = p.api_key ?? "";
+  const output: Record<string, string> = {};
+  for (const [name, provider] of Object.entries(providers)) {
+    output[name] = provider.api_key ?? "";
   }
-  return out;
+  return output;
 }
 
 export function normalizeModels(
-  models: Record<string, VirtualModelConfig | ModelRef[]> | null | undefined,
+  models: Record<string, VirtualModelConfig> | null | undefined,
   normalized?: Record<string, VirtualModelConfig>,
 ): Record<string, VirtualModelConfig> {
   const source = normalized ?? models ?? {};
-  const out: Record<string, VirtualModelConfig> = {};
-  for (const [name, entry] of Object.entries(source)) {
-    let providers: ModelRef[];
-    let pinnedProvider: string | null;
-    let pinnedModel: string | null;
-    if (Array.isArray(entry)) {
-      providers = entry
-        .map((r, i) => ({
-          ...structuredClone(r),
-          priority: r.priority ?? i + 1,
-        }))
-        .sort((a, b) => a.priority - b.priority);
-      pinnedProvider = null;
-      pinnedModel = null;
-    } else {
-      providers = structuredClone(entry.providers ?? []).sort(
-        (a, b) => a.priority - b.priority,
-      );
-      pinnedProvider = entry.pinned_provider ?? null;
-      pinnedModel = entry.pinned_model ?? null;
-    }
-    const pinValid = providers.some(
-      (r) => r.provider === pinnedProvider && r.model === pinnedModel,
-    );
-    const defaultPin = providers.find((r) => r.provider.trim() && r.model.trim());
-    out[name] = {
-      pinned_provider: pinValid ? pinnedProvider : (defaultPin?.provider ?? null),
-      pinned_model: pinValid ? pinnedModel : (defaultPin?.model ?? null),
-      providers,
+  const output: Record<string, VirtualModelConfig> = {};
+  for (const [name, virtualModel] of Object.entries(source)) {
+    output[name] = {
+      pinned_model: virtualModel.pinned_model
+        ? structuredClone(virtualModel.pinned_model)
+        : null,
+      models: structuredClone(virtualModel.models ?? []),
     };
   }
-  return out;
+  return output;
 }
 
 export function buildPutPayload(
@@ -211,49 +203,35 @@ export function buildPutPayload(
   originalMasked: Record<string, string>,
 ): AppConfig {
   const providers: Record<string, ProviderConfig> = {};
-  for (const [name, p] of Object.entries(draft.providers)) {
-    const { has_key: _h, api_key_unresolved: _u, ...rest } = p;
-    void _h;
-    void _u;
+  for (const [name, provider] of Object.entries(draft.providers)) {
+    const { has_key: _hasKey, api_key_unresolved: _unresolved, ...rest } = provider;
+    void _hasKey;
+    void _unresolved;
+    const actualModels: Record<string, ActualModelConfig> = {};
+    for (const [modelName, actualModel] of Object.entries(provider.models)) {
+      actualModels[modelName] = {
+        input_price_per_million: optionalPrice(actualModel.input_price_per_million),
+        output_price_per_million: optionalPrice(actualModel.output_price_per_million),
+        cache_read_price_per_million: optionalPrice(actualModel.cache_read_price_per_million),
+        cache_write_price_per_million: optionalPrice(actualModel.cache_write_price_per_million),
+      };
+    }
     providers[name] = {
       ...rest,
-      api_key: shouldPreserveApiKey(name, p.api_key, originalMasked)
+      api_key: shouldPreserveApiKey(name, provider.api_key, originalMasked)
         ? ""
-        : p.api_key,
+        : provider.api_key,
+      models: actualModels,
     };
   }
 
-  const modelOut: Record<string, VirtualModelConfig> = {};
-  for (const [name, m] of Object.entries(models)) {
-    const providersList = m.providers.map((r, i) => ({
-      provider: r.provider,
-      model: r.model,
-      priority: i + 1,
-      input_price_per_million: optionalPrice(r.input_price_per_million),
-      output_price_per_million: optionalPrice(r.output_price_per_million),
-      cache_read_price_per_million: optionalPrice(r.cache_read_price_per_million),
-      cache_write_price_per_million: optionalPrice(r.cache_write_price_per_million),
-    }));
-    if (providersList.length === 0) continue;
-    let pinned_provider = m.pinned_provider ?? null;
-    let pinned_model = m.pinned_model ?? null;
-    const pinOk =
-      pinned_provider &&
-      pinned_model &&
-      providersList.some(
-        (r) => r.provider === pinned_provider && r.model === pinned_model,
-      );
-    if (!pinOk) {
-      const defaultPin = providersList.find(
-        (r) => r.provider.trim() && r.model.trim(),
-      );
-      pinned_provider = defaultPin?.provider ?? null;
-      pinned_model = defaultPin?.model ?? null;
-    }
-    modelOut[name] = {
-      pinned_provider,
-      pinned_model,
-      providers: providersList,
+  const modelOutput: Record<string, VirtualModelConfig> = {};
+  for (const [name, virtualModel] of Object.entries(models)) {
+    modelOutput[name] = {
+      pinned_model: virtualModel.pinned_model
+        ? { ...virtualModel.pinned_model }
+        : null,
+      models: virtualModel.models.map((model) => ({ ...model })),
     };
   }
 
@@ -261,6 +239,6 @@ export function buildPutPayload(
     server: { ...draft.server },
     router: { ...draft.router },
     providers,
-    models: modelOut,
+    models: modelOutput,
   };
 }

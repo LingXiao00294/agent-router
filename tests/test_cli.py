@@ -25,20 +25,21 @@ type = "anthropic"
 api_key = "sk-secret-1111"
 base_url = "https://api.one.test"
 
+[providers.p1.models.sonnet-first]
+
 [providers.p2]
 type = "anthropic"
 api_key = "sk-secret-2222"
 base_url = "https://api.two.test"
 
-[[models.sonnet-router]]
-provider = "p2"
-model = "sonnet-second"
-priority = 2
+[providers.p2.models.sonnet-second]
 
-[[models.sonnet-router]]
-provider = "p1"
-model = "sonnet-first"
-priority = 1
+[models.sonnet-router]
+pinned_model = { provider = "p1", model = "sonnet-first" }
+models = [
+  { provider = "p1", model = "sonnet-first" },
+  { provider = "p2", model = "sonnet-second" },
+]
 """,
         encoding="utf-8",
     )
@@ -248,10 +249,11 @@ type = "anthropic"
 api_key = "${MISSING_API_KEY_FOR_STARTUP_TEST}"
 base_url = "https://api.one.test"
 
-[[models.sonnet-router]]
-provider = "p1"
-model = "sonnet-first"
-priority = 1
+[providers.p1.models.sonnet-first]
+
+[models.sonnet-router]
+pinned_model = { provider = "p1", model = "sonnet-first" }
+models = [{ provider = "p1", model = "sonnet-first" }]
 """,
         encoding="utf-8",
     )

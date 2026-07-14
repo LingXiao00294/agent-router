@@ -18,7 +18,7 @@ from structlog.contextvars import bind_contextvars, get_contextvars, unbind_cont
 
 from agent_router.api.config import create_config_router
 from agent_router.api.metrics import create_metrics_router
-from agent_router.config import AppConfig, load_config
+from agent_router.config import AppConfig
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
 from agent_router.routing import (
@@ -140,19 +140,26 @@ def create_app(
     app.include_router(metrics_router)
 
     # 注册 config API
-    async def _reload_config() -> None:
+    async def _reload_config(new_config: AppConfig) -> None:
+        """切换 Router 与日志配置，并在任一步失败时恢复旧运行时。"""
+        old_config = app.state.router_engine.config
         try:
-            new_config = load_config(config_path, allow_unresolved_api_keys=True)
-        except SystemExit:
-            raise RuntimeError("新配置语义无效，旧配置保持不变")
-        # 先重载路由配置，成功后再切换日志级别，避免半成功的不一致状态。
-        await app.state.router_engine.reload_config(new_config)
-        reconfigure_logging(
-            level=new_config.server.log_level,
-            log_file=new_config.server.log_file,
-            log_max_bytes=new_config.server.log_max_bytes,
-            log_backup_count=new_config.server.log_backup_count,
-        )
+            await app.state.router_engine.reload_config(new_config)
+            reconfigure_logging(
+                level=new_config.server.log_level,
+                log_file=new_config.server.log_file,
+                log_max_bytes=new_config.server.log_max_bytes,
+                log_backup_count=new_config.server.log_backup_count,
+            )
+        except Exception:
+            await app.state.router_engine.reload_config(old_config)
+            reconfigure_logging(
+                level=old_config.server.log_level,
+                log_file=old_config.server.log_file,
+                log_max_bytes=old_config.server.log_max_bytes,
+                log_backup_count=old_config.server.log_backup_count,
+            )
+            raise
 
     config_router = create_config_router(config_path, reload_config_fn=_reload_config)
     app.include_router(config_router)

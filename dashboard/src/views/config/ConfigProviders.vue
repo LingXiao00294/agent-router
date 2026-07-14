@@ -57,13 +57,20 @@ function closeEdit() {
 async function remove(name: string) {
   const ok = await confirm.confirm({
     title: "删除 Provider",
-    message: `确定删除「${name}」？相关模型引用与 pin 会被清理。`,
+    message: `确定删除「${name}」？`,
     confirmText: "删除",
     danger: true,
   });
   if (ok) {
+    const referencedBy = store.removeProvider(name);
+    if (referencedBy.length) {
+      fieldErrors.value = {
+        ...fieldErrors.value,
+        providers: `Provider「${name}」仍被虚拟模型引用：${referencedBy.join("、")}。请先保存引用移除。`,
+      };
+      return;
+    }
     if (editing.value === name) editing.value = null;
-    store.removeProvider(name);
   }
 }
 

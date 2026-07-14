@@ -277,6 +277,7 @@ async def test_streaming_request_id_propagates(tmp_path):
     from agent_router.config import (
         AppConfig,
         ProviderConfig,
+        RouterConfig,
         ServerConfig,
         VirtualModelConfig,
     )
@@ -299,6 +300,7 @@ async def test_streaming_request_id_propagates(tmp_path):
 
     config = AppConfig(
         server=ServerConfig(host="127.0.0.1", port=9456),
+        router=RouterConfig(mode="failover"),
         models={
             "vm": VirtualModelConfig(
                 providers=[

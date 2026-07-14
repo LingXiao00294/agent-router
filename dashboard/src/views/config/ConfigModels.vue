@@ -10,7 +10,18 @@ const confirm = useConfirm();
 const { draft, models, fieldErrors } = storeToRefs(store);
 const newName = ref("");
 const failoverEnabled = computed(() => draft.value?.router.mode === "failover");
-const providerNames = computed(() => Object.keys(draft.value?.providers ?? {}));
+const actualModelGroups = computed(() =>
+  Object.entries(draft.value?.providers ?? {}).map(([provider, config], providerIndex) => ({
+    provider,
+    options: Object.keys(config.models).map((model, modelIndex) => ({
+      id: `${providerIndex}-${modelIndex}`,
+      provider,
+      model,
+      label: `${provider}/${model}`,
+    })),
+  })),
+);
+const actualModelOptions = computed(() => actualModelGroups.value.flatMap((group) => group.options));
 const dragCandidate = ref<{
   model: string;
   index: number;
@@ -34,33 +45,22 @@ const dragPreview = ref<HTMLElement | null>(null);
 const refKeys = new WeakMap<ModelRef, number>();
 let nextRefKey = 0;
 const DRAG_START_DISTANCE = 6;
-type PriceField =
-  | "input_price_per_million"
-  | "output_price_per_million"
-  | "cache_read_price_per_million"
-  | "cache_write_price_per_million";
-const priceFields: { key: PriceField; label: string }[] = [
-  { key: "input_price_per_million", label: "输入" },
-  { key: "output_price_per_million", label: "输出" },
-  { key: "cache_read_price_per_million", label: "缓存读取" },
-  { key: "cache_write_price_per_million", label: "缓存写入" },
-];
 const dragPreviewRow = computed(() => {
   const source = draggingRef.value;
-  return source ? models.value[source.model]?.providers[source.index] ?? null : null;
+  return source ? models.value[source.model]?.models[source.index] ?? null : null;
 });
 
 watch(
   models,
   (current) => {
     for (const m of Object.values(current)) {
-      const pinValid = m.providers.some(
-        (row) => row.provider === m.pinned_provider && row.model === m.pinned_model,
+      const pinValid = m.models.some(
+        (row) =>
+          row.provider === m.pinned_model?.provider && row.model === m.pinned_model?.model,
       );
       if (pinValid) continue;
-      const first = m.providers.find((row) => row.provider.trim() && row.model.trim());
-      m.pinned_provider = first?.provider ?? null;
-      m.pinned_model = first?.model ?? null;
+      const first = m.models[0];
+      m.pinned_model = first ? { ...first } : null;
     }
   },
   { deep: true, immediate: true },
@@ -84,19 +84,48 @@ async function remove(name: string) {
 function addRef(model: string) {
   const m = models.value[model];
   if (!m) return;
-  const provider = providerNames.value[0] || "";
-  m.providers.push({ provider, model: "", priority: m.providers.length + 1 });
+  const option = actualModelOptions.value.find(
+    (candidate) =>
+      !m.models.some(
+        (selected) =>
+          selected.provider === candidate.provider && selected.model === candidate.model,
+      ),
+  );
+  if (option) m.models.push({ provider: option.provider, model: option.model });
 }
 
-function setPrice(row: ModelRef, field: PriceField, event: Event) {
-  const raw = (event.target as HTMLInputElement).value;
-  row[field] = raw === "" ? undefined : Number(raw);
+function optionId(row: ModelRef): string {
+  return (
+    actualModelOptions.value.find(
+      (option) => option.provider === row.provider && option.model === row.model,
+    )?.id ?? ""
+  );
+}
+
+function optionDisabled(model: string, index: number, option: ModelRef): boolean {
+  return models.value[model]?.models.some(
+    (selected, selectedIndex) =>
+      selectedIndex !== index &&
+      selected.provider === option.provider &&
+      selected.model === option.model,
+  ) ?? false;
+}
+
+function selectRef(model: string, index: number, event: Event) {
+  const option = actualModelOptions.value.find(
+    (candidate) => candidate.id === (event.target as HTMLSelectElement).value,
+  );
+  if (!option || !models.value[model]) return;
+  models.value[model].models[index] = {
+    provider: option.provider,
+    model: option.model,
+  };
 }
 
 function removeRef(model: string, idx: number) {
   const m = models.value[model];
   if (!m) return;
-  m.providers.splice(idx, 1);
+  m.models.splice(idx, 1);
 }
 
 function refKey(row: ModelRef): number {
@@ -285,17 +314,18 @@ function isDropTarget(model: string, index: number, placement: "before" | "after
 function setPin(model: string, idx: number) {
   const m = models.value[model];
   if (!m) return;
-  const ref = m.providers[idx];
+  const ref = m.models[idx];
   if (!ref) return;
-  m.pinned_provider = ref.provider;
-  m.pinned_model = ref.model;
+  m.pinned_model = { ...ref };
 }
 
 function isPinned(model: string, idx: number) {
   const m = models.value[model];
-  const ref = m?.providers[idx];
+  const ref = m?.models[idx];
   if (!m || !ref) return false;
-  return m.pinned_provider === ref.provider && m.pinned_model === ref.model;
+  return (
+    m.pinned_model?.provider === ref.provider && m.pinned_model?.model === ref.model
+  );
 }
 </script>
 
@@ -315,7 +345,7 @@ function isPinned(model: string, idx: number) {
         <div>
           <h3 class="mono">{{ name }}</h3>
           <p class="muted tiny">
-            拖动左侧手柄调整链顺序（priority）
+            拖动左侧手柄调整模型链顺序
             <template v-if="failoverEnabled"> · 失败时按顺序尝试</template>
             <template v-else> · 仅调用 Pin 指定的模型</template>
           </p>
@@ -325,9 +355,9 @@ function isPinned(model: string, idx: number) {
         <button class="btn btn-sm btn-danger" type="button" @click="remove(name)">删除</button>
       </header>
 
-      <div v-if="!m.providers.length" class="empty-state">尚无 provider 引用</div>
+      <div v-if="!m.models.length" class="empty-state">尚未选择实际模型</div>
       <div
-        v-for="(row, idx) in m.providers"
+        v-for="(row, idx) in m.models"
         :key="refKey(row)"
         class="ref-row"
         data-ref-row
@@ -354,11 +384,24 @@ function isPinned(model: string, idx: number) {
           ⠿
         </button>
         <span class="prio mono">#{{ idx + 1 }}</span>
-        <select v-model="row.provider">
-          <option disabled value="">选择 provider</option>
-          <option v-for="pn in providerNames" :key="pn" :value="pn">{{ pn }}</option>
+        <select :value="optionId(row)" @change="selectRef(name, idx, $event)">
+          <option disabled value="">选择实际模型</option>
+          <optgroup
+            v-for="group in actualModelGroups"
+            :key="group.provider"
+            :label="group.provider"
+          >
+            <option
+              v-for="option in group.options"
+              :key="option.id"
+              :value="option.id"
+              :disabled="optionDisabled(name, idx, option)"
+            >
+              {{ option.label }}
+            </option>
+          </optgroup>
         </select>
-        <input v-model="row.model" placeholder="上游模型名" />
+        <span class="actual-model mono">{{ row.provider }}/{{ row.model }}</span>
         <div class="ref-actions">
           <button
             class="btn btn-sm"
@@ -371,35 +414,18 @@ function isPinned(model: string, idx: number) {
           </button>
           <button class="btn btn-sm btn-danger" type="button" @click="removeRef(name, idx)">×</button>
         </div>
-        <div class="price-grid">
-          <span class="price-title muted">费用（USD / 1M Token，可选）</span>
-          <label v-for="price in priceFields" :key="price.key" class="price-field">
-            <span>{{ price.label }}</span>
-            <input
-              type="number"
-              min="0"
-              step="0.0001"
-              :value="row[price.key] ?? ''"
-              placeholder="0"
-              @input="setPrice(row, price.key, $event)"
-            />
-          </label>
-        </div>
         <p v-if="fieldErrors[`models.${name}.ref.${idx}`]" class="err ref-err">
           {{ fieldErrors[`models.${name}.ref.${idx}`] }}
         </p>
         <p v-if="fieldErrors[`models.${name}.ref.${idx}.model`]" class="err ref-err">
           {{ fieldErrors[`models.${name}.ref.${idx}.model`] }}
         </p>
-        <p v-if="fieldErrors[`models.${name}.ref.${idx}.price`]" class="err ref-err">
-          {{ fieldErrors[`models.${name}.ref.${idx}.price`] }}
-        </p>
       </div>
 
       <div class="card-foot">
-        <button class="btn btn-sm" type="button" @click="addRef(name)">添加引用</button>
-        <span v-if="m.pinned_provider" class="pin-summary muted">
-          当前指定：{{ m.pinned_provider }}/{{ m.pinned_model }}
+        <button class="btn btn-sm" type="button" @click="addRef(name)">添加实际模型</button>
+        <span v-if="m.pinned_model" class="pin-summary muted">
+          当前指定：{{ m.pinned_model.provider }}/{{ m.pinned_model.model }}
         </span>
       </div>
     </article>
@@ -415,10 +441,12 @@ function isPinned(model: string, idx: number) {
     >
       <button class="drag-handle" type="button" disabled>⠿</button>
       <span class="prio mono">#{{ draggingRef.index + 1 }}</span>
-      <select :value="dragPreviewRow.provider" disabled>
-        <option :value="dragPreviewRow.provider">{{ dragPreviewRow.provider }}</option>
+      <select :value="optionId(dragPreviewRow)" disabled>
+        <option :value="optionId(dragPreviewRow)">
+          {{ dragPreviewRow.provider }}/{{ dragPreviewRow.model }}
+        </option>
       </select>
-      <input :value="dragPreviewRow.model" readonly />
+      <span class="actual-model mono">{{ dragPreviewRow.provider }}/{{ dragPreviewRow.model }}</span>
       <div class="ref-actions">
         <button
           class="btn btn-sm"
@@ -429,13 +457,6 @@ function isPinned(model: string, idx: number) {
           Pin
         </button>
         <button class="btn btn-sm btn-danger" type="button" disabled>×</button>
-      </div>
-      <div class="price-grid">
-        <span class="price-title muted">费用（USD / 1M Token，可选）</span>
-        <label v-for="price in priceFields" :key="price.key" class="price-field">
-          <span>{{ price.label }}</span>
-          <input :value="dragPreviewRow[price.key] ?? ''" placeholder="0" readonly />
-        </label>
       </div>
     </div>
   </Teleport>
@@ -520,26 +541,6 @@ function isPinned(model: string, idx: number) {
   grid-column: 1 / -1;
   margin: 0;
 }
-.price-grid {
-  display: grid;
-  grid-column: 3 / -1;
-  grid-template-columns: repeat(4, minmax(96px, 1fr));
-  gap: 0.45rem;
-  align-items: end;
-}
-.price-title {
-  grid-column: 1 / -1;
-  font-size: 0.72rem;
-}
-.price-field {
-  display: grid;
-  gap: 0.2rem;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-}
-.price-field input {
-  width: 100%;
-}
 .ref-row select,
 .ref-row input {
   min-height: 34px;
@@ -547,6 +548,12 @@ function isPinned(model: string, idx: number) {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
+}
+.actual-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .prio { color: var(--text-muted); font-size: 0.8rem; }
 .ref-actions { display: flex; gap: 0.25rem; }
@@ -561,10 +568,6 @@ function isPinned(model: string, idx: number) {
 @media (max-width: 800px) {
   .ref-row {
     grid-template-columns: 1fr;
-  }
-  .price-grid {
-    grid-column: 1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

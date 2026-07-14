@@ -1,1072 +1,615 @@
 from __future__ import annotations
 
-import os
-import tempfile
+from copy import deepcopy
 from pathlib import Path
+import tomllib
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_router import app as app_module
+from agent_router.api import config as config_api
 from agent_router.app import create_app
 from agent_router.config import (
+    ActualModelDef,
     AppConfig,
+    ConfigError,
+    ModelRef,
     ProviderConfig,
+    RouterConfig,
+    ServerConfig,
     VirtualModelConfig,
     load_config,
+    parse_config_data,
 )
 from agent_router.db import CallStore
 from agent_router.routing import Router
 
 
-def _write_toml(content: str) -> Path:
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False)
-    tmp.write(content)
-    tmp.close()
-    return Path(tmp.name)
-
-
-def test_load_model_token_prices():
-    toml = """
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://test.api.com"
-
-[[models.test]]
-provider = "p1"
-model = "claude-test"
-priority = 1
-input_price_per_million = 1.0
-output_price_per_million = 4.0
-cache_read_price_per_million = 0.1
-cache_write_price_per_million = 1.25
-"""
-    path = _write_toml(toml)
-    try:
-        config = load_config(path)
-        model = config.models["test"].providers[0]
-        assert model.input_price_per_million == 1.0
-        assert model.output_price_per_million == 4.0
-        assert model.cache_read_price_per_million == 0.1
-        assert model.cache_write_price_per_million == 1.25
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def test_model_token_prices_preserve_missing_and_explicit_zero():
-    toml = """
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://test.api.com"
-
-[[models.test]]
-provider = "p1"
-model = "missing-prices"
-priority = 1
-
-[[models.test]]
-provider = "p1"
-model = "zero-prices"
-priority = 2
-input_price_per_million = 0
-output_price_per_million = 0
-cache_read_price_per_million = 0
-cache_write_price_per_million = 0
-"""
-    path = _write_toml(toml)
-    try:
-        config = load_config(path)
-        missing, zero = config.models["test"].providers
-
-        assert missing.input_price_per_million is None
-        assert missing.output_price_per_million is None
-        assert missing.cache_read_price_per_million is None
-        assert missing.cache_write_price_per_million is None
-        assert zero.input_price_per_million == 0.0
-        assert zero.output_price_per_million == 0.0
-        assert zero.cache_read_price_per_million == 0.0
-        assert zero.cache_write_price_per_million == 0.0
-    finally:
-        path.unlink(missing_ok=True)
-
-
-class TestLoadConfig:
-    def test_basic_config(self):
-        toml = """
-[server]
-host = "0.0.0.0"
-port = 9999
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://test.api.com"
-
-[[models.test]]
-provider = "p1"
-model = "claude-test"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.server.host == "0.0.0.0"
-            assert config.server.port == 9999
-            assert "test" in config.models
-            assert len(config.models["test"].providers) == 1
-            assert config.models["test"].providers[0].model == "claude-test"
-            assert config.models["test"].providers[0].api_key == "sk-test"
-            assert config.router.mode == "sticky"
-            assert config.models["test"].pinned_provider == "p1"
-            assert config.models["test"].pinned_model == "claude-test"
-        finally:
-            path.unlink()
-
-    def test_failover_allows_stale_pins(self):
-        """failover 模式下过期 pin 不阻止加载（sticky 才校验链成员）."""
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[router]
-mode = "failover"
-
-[providers.p1]
-type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
-
-[models.test]
-pinned_provider = "gone"
-pinned_model = "old"
-
-[[models.test.providers]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.models["test"].pinned_provider == "gone"
-            assert config.models["test"].pinned_model == "old"
-        finally:
-            path.unlink()
-
-    def test_sticky_rejects_stale_pins(self, capsys):
-        toml = """
+BASE_TOML = """\
 [server]
 host = "127.0.0.1"
 port = 9456
 
 [router]
 mode = "sticky"
+failure_threshold = 5
+recovery_timeout = 600
 
 [providers.p1]
 type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
+api_key = "sk-provider-one"
+base_url = "https://p1.test/"
 
-[models.test]
-pinned_provider = "gone"
-pinned_model = "old"
+[providers.p1.models.shared]
+input_price_per_million = 1.0
+output_price_per_million = 4.0
+cache_read_price_per_million = 0.1
+cache_write_price_per_million = 1.25
 
-[[models.test.providers]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            with pytest.raises(SystemExit):
-                load_config(path)
-            assert "不在该虚拟模型的 provider 链中" in capsys.readouterr().err
-        finally:
-            path.unlink()
-
-    def test_priority_sorting(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
-
-[[models.test]]
-provider = "p1"
-model = "third"
-priority = 3
-
-[[models.test]]
-provider = "p1"
-model = "first"
-priority = 1
-
-[[models.test]]
-provider = "p1"
-model = "second"
-priority = 2
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            providers = config.models["test"].providers
-            assert [p.priority for p in providers] == [1, 2, 3]
-            assert [p.model for p in providers] == ["first", "second", "third"]
-        finally:
-            path.unlink()
-
-    def test_env_var_interpolation(self):
-        os.environ["TEST_API_KEY"] = "env-key-123"
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "${TEST_API_KEY}"
-base_url = "https://api.com"
-
-[[models.test]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.models["test"].providers[0].api_key == "env-key-123"
-        finally:
-            path.unlink()
-            del os.environ["TEST_API_KEY"]
-
-    def test_missing_config_file(self):
-        with pytest.raises(SystemExit):
-            load_config("/nonexistent/config.toml")
-
-    def test_empty_models(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.models == {}
-        finally:
-            path.unlink()
-
-    def test_empty_providers(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[[models.test]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.models == {}
-        finally:
-            path.unlink()
-
-    def test_server_only_config(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert config.server.host == "127.0.0.1"
-            assert config.server.port == 9456
-            assert config.models == {}
-        finally:
-            path.unlink()
-
-    def test_unresolved_env_var(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "${NONEXISTENT_ENV_VAR_12345}"
-base_url = "https://api.com"
-
-[[models.test]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            with pytest.raises(SystemExit):
-                load_config(path)
-        finally:
-            path.unlink()
-
-    def test_unresolved_env_var_allowed_for_runtime_startup(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "${NONEXISTENT_ENV_VAR_12345}"
-base_url = "https://api.com"
-
-[[models.test]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path, allow_unresolved_api_keys=True)
-            assert (
-                config.models["test"].providers[0].api_key
-                == "${NONEXISTENT_ENV_VAR_12345}"
-            )
-        finally:
-            path.unlink()
-
-    def test_multiple_virtual_models(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "k1"
-base_url = "https://a.com"
+[providers.p1.models.other]
 
 [providers.p2]
 type = "anthropic"
-api_key = "k2"
-base_url = "https://b.com"
+api_key = "sk-provider-two"
+base_url = "https://p2.test"
 
-[[models.haiku]]
-provider = "p1"
-model = "h1"
-priority = 1
+[providers.p2.models.shared]
 
-[[models.sonnet]]
-provider = "p2"
-model = "s1"
-priority = 1
-
-[[models.opus]]
-provider = "p1"
-model = "o1"
-priority = 1
+[models.router]
+pinned_model = { provider = "p1", model = "shared" }
+models = [
+  { provider = "p1", model = "shared" },
+  { provider = "p2", model = "shared" },
+]
 """
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            assert set(config.models.keys()) == {"haiku", "sonnet", "opus"}
-        finally:
-            path.unlink()
-
-    def test_unknown_provider_ref(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
-
-[[models.test]]
-provider = "nonexistent"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            # 未知 provider 被自动跳过，模型为空不应报错
-            assert "test" not in config.models
-        finally:
-            path.unlink()
-
-    def test_multiple_providers_in_model(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.anthropic]
-type = "anthropic"
-api_key = "sk-ant-xxx"
-base_url = "https://api.anthropic.com"
-
-[providers.zhipu]
-type = "anthropic"
-api_key = "glm-key"
-base_url = "https://api.z.ai/api/anthropic"
-
-[[models.haiku-router]]
-provider = "anthropic"
-model = "claude-haiku-4-5"
-priority = 1
-
-[[models.haiku-router]]
-provider = "zhipu"
-model = "glm-5.1"
-priority = 2
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            providers = config.models["haiku-router"].providers
-            assert len(providers) == 2
-            assert providers[0].model == "claude-haiku-4-5"
-            assert providers[0].api_key == "sk-ant-xxx"
-            assert providers[1].model == "glm-5.1"
-            assert providers[1].api_key == "glm-key"
-        finally:
-            path.unlink()
-
-    def test_missing_provider_field_in_model_ref(self):
-        toml = """
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "k"
-base_url = "https://api.com"
-
-[[models.test]]
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            with pytest.raises(SystemExit):
-                load_config(path)
-        finally:
-            path.unlink()
 
 
-class TestReloadConfig:
-    """Router.reload_config 单元测试."""
+def _write_config(tmp_path: Path, content: str = BASE_TOML) -> Path:
+    """Write a TOML fixture and return its path."""
+    path = tmp_path / "config.toml"
+    path.write_text(content, encoding="utf-8")
+    return path
 
-    @pytest.mark.asyncio
-    async def test_reload_updates_models(self, sample_config, http_client):
-        router = Router(sample_config, http_client)
-        assert set(router.model_names) == {"haiku-router", "sonnet-router"}
 
+def _raw_config() -> dict:
+    """Return a fresh parsed copy of the canonical test configuration."""
+    return tomllib.loads(BASE_TOML)
+
+
+def _assert_no_temp_file(path: Path) -> None:
+    assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+
+@pytest.fixture
+async def store(tmp_path):
+    """Provide an initialized isolated call store for config API tests."""
+    call_store = CallStore(str(tmp_path / "calls.db"))
+    await call_store.init()
+    try:
+        yield call_store
+    finally:
+        await call_store.close()
+
+
+class TestConfigDomainModel:
+    def test_loads_provider_catalog_and_resolves_runtime_chain(self, tmp_path):
+        config = load_config(_write_config(tmp_path))
+
+        assert set(config.providers["p1"].models) == {"shared", "other"}
+        assert config.providers["p1"].base_url == "https://p1.test"
+        providers = config.models["router"].providers
+        assert [(item.name, item.model, item.priority) for item in providers] == [
+            ("p1", "shared", 1),
+            ("p2", "shared", 2),
+        ]
+        assert providers[0].input_price_per_million == 1.0
+        assert providers[0].cache_write_price_per_million == 1.25
+        assert providers[1].input_price_per_million is None
+        assert config.models["router"].pinned_model == ModelRef(
+            provider="p1", model="shared"
+        )
+
+    def test_array_order_generates_priority(self, tmp_path):
+        raw = _raw_config()
+        raw["router"]["mode"] = "failover"
+        raw["models"]["router"]["models"].reverse()
+        raw["models"]["router"]["pinned_model"] = None
+
+        config = parse_config_data(raw)
+
+        assert [provider.name for provider in config.models["router"].providers] == [
+            "p2",
+            "p1",
+        ]
+        assert [
+            provider.priority for provider in config.models["router"].providers
+        ] == [
+            1,
+            2,
+        ]
+
+    def test_multiple_virtual_models_can_share_actual_model(self):
+        raw = _raw_config()
+        raw["models"]["second"] = {
+            "pinned_model": {"provider": "p1", "model": "shared"},
+            "models": [{"provider": "p1", "model": "shared"}],
+        }
+
+        config = parse_config_data(raw)
+
+        assert config.models["router"].providers[0].model == "shared"
+        assert config.models["second"].providers[0].model == "shared"
+
+    def test_missing_and_explicit_zero_prices_remain_distinct(self):
+        raw = _raw_config()
+        raw["providers"]["p1"]["models"]["other"] = {
+            "input_price_per_million": 0,
+            "output_price_per_million": 0,
+            "cache_read_price_per_million": 0,
+            "cache_write_price_per_million": 0,
+        }
+        raw["router"]["mode"] = "failover"
+        raw["models"]["router"] = {
+            "models": [
+                {"provider": "p2", "model": "shared"},
+                {"provider": "p1", "model": "other"},
+            ]
+        }
+
+        config = parse_config_data(raw)
+        missing, zero = config.models["router"].providers
+
+        assert missing.input_price_per_million is None
+        assert zero.input_price_per_million == 0.0
+
+    @pytest.mark.parametrize(
+        ("mutate", "message"),
+        [
+            (
+                lambda raw: raw["models"]["router"]["models"].append(
+                    {"provider": "missing", "model": "shared"}
+                ),
+                "未知 Provider",
+            ),
+            (
+                lambda raw: raw["models"]["router"]["models"].append(
+                    {"provider": "p1", "model": "missing"}
+                ),
+                "未在 Provider",
+            ),
+            (
+                lambda raw: raw["models"]["router"]["models"].append(
+                    {"provider": "p1", "model": "shared"}
+                ),
+                "不能重复引用",
+            ),
+        ],
+    )
+    def test_rejects_invalid_model_references(self, mutate, message):
+        raw = _raw_config()
+        mutate(raw)
+
+        with pytest.raises(ConfigError, match=message):
+            parse_config_data(raw)
+
+    def test_rejects_blank_actual_model_name(self):
+        raw = _raw_config()
+        raw["providers"]["p1"]["models"][""] = {}
+
+        with pytest.raises(ConfigError, match="实际模型名不能为空"):
+            parse_config_data(raw)
+
+    @pytest.mark.parametrize("price", [-0.01, float("-inf")])
+    def test_rejects_negative_actual_model_price(self, price):
+        raw = _raw_config()
+        raw["providers"]["p1"]["models"]["shared"]["input_price_per_million"] = price
+
+        with pytest.raises(ConfigError, match="模型费用必须大于等于 0"):
+            parse_config_data(raw)
+
+    def test_allows_empty_provider_catalog(self):
+        raw = _raw_config()
+        raw["providers"]["empty"] = {
+            "type": "anthropic",
+            "api_key": "sk-empty",
+            "base_url": "https://empty.test",
+            "models": {},
+        }
+
+        config = parse_config_data(raw)
+
+        assert config.providers["empty"].models == {}
+
+    def test_rejects_empty_virtual_model_chain(self):
+        raw = _raw_config()
+        raw["models"]["router"]["models"] = []
+
+        with pytest.raises(ConfigError, match="at least 1 item"):
+            parse_config_data(raw)
+
+    def test_sticky_requires_structured_pin_in_chain(self):
+        missing = _raw_config()
+        missing["models"]["router"]["pinned_model"] = None
+        stale = _raw_config()
+        stale["models"]["router"]["pinned_model"] = {
+            "provider": "p1",
+            "model": "other",
+        }
+
+        with pytest.raises(ConfigError, match="必须设置 pinned_model"):
+            parse_config_data(missing)
+        with pytest.raises(ConfigError, match="不在该虚拟模型的模型链中"):
+            parse_config_data(stale)
+
+    def test_rejects_unknown_fields_and_legacy_format(self):
+        unknown = _raw_config()
+        unknown["models"]["router"]["priority"] = 1
+        legacy = _raw_config()
+        legacy["models"]["router"] = {
+            "pinned_provider": "p1",
+            "pinned_model": "shared",
+            "providers": [{"provider": "p1", "model": "shared", "priority": 1}],
+        }
+
+        with pytest.raises(ConfigError, match="旧版配置格式"):
+            parse_config_data(unknown)
+        with pytest.raises(ConfigError, match="旧版配置格式"):
+            parse_config_data(legacy)
+
+    def test_unresolved_api_key_is_strict_by_default(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MISSING_PROVIDER_KEY", raising=False)
+        raw = _raw_config()
+        raw["providers"]["p1"]["api_key"] = "${MISSING_PROVIDER_KEY}"
+        path = _write_config(tmp_path, config_api._serialize_toml(raw))
+
+        with pytest.raises(ConfigError, match="环境变量未设置"):
+            load_config(path)
+
+        config = load_config(path, allow_unresolved_api_keys=True)
+        assert config.providers["p1"].api_key == "${MISSING_PROVIDER_KEY}"
+
+    def test_missing_file_raises_structured_error(self, tmp_path):
+        with pytest.raises(ConfigError, match="配置文件不存在"):
+            load_config(tmp_path / "missing.toml")
+
+
+class TestRuntimeReload:
+    async def test_reload_updates_config_and_provider_limits(self, sample_config):
+        router = Router(sample_config, http_client=None)
         new_config = AppConfig(
-            server=sample_config.server,
+            server=ServerConfig(),
+            router=RouterConfig(
+                mode="failover", failure_threshold=2, recovery_timeout=30
+            ),
             models={
                 "new-model": VirtualModelConfig(
                     providers=[
                         ProviderConfig(
                             type="anthropic",
-                            name="p1",
-                            model="m-new",
-                            api_key="k",
-                            base_url="https://api.com",
+                            name="new-provider",
+                            model="new-actual",
+                            api_key="sk-new",
+                            base_url="https://new.test",
                             priority=1,
-                        ),
-                    ]
-                ),
-            },
-        )
-        await router.reload_config(new_config)
-        assert router.model_names == ["new-model"]
-        assert router.config.models["new-model"].providers[0].model == "m-new"
-
-    @pytest.mark.asyncio
-    async def test_reload_preserves_circuit_breaker(self, sample_config, http_client):
-        router = Router(sample_config, http_client)
-        # 触发一个熔断
-        await router.circuit_breaker.record_failure("anthropic", immediate=True)
-        state = await router.circuit_breaker.state("anthropic")
-        assert state.value == "open"
-
-        new_config = AppConfig(
-            server=sample_config.server,
-            models={
-                "m": VirtualModelConfig(
-                    providers=[
-                        ProviderConfig(
-                            type="anthropic",
-                            name="anthropic",
-                            model="x",
-                            api_key="k",
-                            base_url="https://api.com",
-                            priority=1,
+                            max_concurrent=3,
                         )
                     ]
                 )
             },
         )
+
         await router.reload_config(new_config)
 
-        # 熔断状态保留
-        state = await router.circuit_breaker.state("anthropic")
-        assert state.value == "open"
+        assert router.model_names == ["new-model"]
+        assert router.circuit_breaker.failure_threshold == 2
+        assert router.provider_gate.snapshot()["new-provider"]["max_concurrent"] == 3
 
-
-_TOML_TEMPLATE = """\
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[[models.{model_name}]]
-provider = "p1"
-model = "{model_name}"
-priority = 1
-"""
-
-
-class TestHotReloadAPI:
-    """PUT /api/config 热重载集成测试."""
-
-    @pytest.fixture
-    async def store(self):
-        s = CallStore(":memory:")
-        await s.init()
-        yield s
-        await s.close()
-
-    @pytest.mark.asyncio
-    async def test_put_config_hot_reload(self, store):
-        """PUT 后 /v1/models 应立即返回新模型，无需重启."""
-        path = _write_toml(_TOML_TEMPLATE.format(model_name="old-model"))
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                # 确认初始模型
-                resp = await ac.get("/v1/models")
-                assert resp.json()["data"][0]["id"] == "old-model"
-
-                # PUT 新配置
-                new_body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                    },
-                    "models": {
-                        "new-model": [
-                            {"provider": "p1", "model": "new-model", "priority": 1},
-                        ],
-                    },
-                }
-                resp = await ac.put("/api/config", json=new_body)
-                assert resp.status_code == 200
-                assert resp.json()["message"] == "配置已更新并热重载"
-
-                # 热重载后模型应已变化
-                resp = await ac.get("/v1/models")
-                assert resp.json()["data"][0]["id"] == "new-model"
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_switch_to_sticky_without_pin_is_rejected_before_write(self, store):
-        """缺少模型 pin 时切换 sticky 应返回 400，且不得改写配置文件."""
-        original = """\
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[router]
-mode = "failover"
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[[models.unpinned]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(original)
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                resp = await ac.put(
-                    "/api/config",
-                    json={"router": {"mode": "sticky"}},
-                )
-
-            assert resp.status_code == 400
-            assert "模型 'unpinned' 未指定 pin" in resp.json()["detail"]
-            assert path.read_text() == original
-            assert app.state.router_engine.config.router.mode == "failover"
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_switch_to_sticky_with_valid_pin_succeeds(self, store):
-        """每个模型都有有效 pin 时应允许切换 sticky."""
-        toml = """\
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[router]
-mode = "failover"
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[models.pinned]
-pinned_provider = "p1"
-pinned_model = "m1"
-
-[[models.pinned.providers]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                resp = await ac.put(
-                    "/api/config",
-                    json={"router": {"mode": "sticky"}},
-                )
-
-            assert resp.status_code == 200
-            assert load_config(path).router.mode == "sticky"
-            assert app.state.router_engine.config.router.mode == "sticky"
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_get_config_marks_unresolved_api_key_as_missing(
-        self, store, monkeypatch
+    async def test_reload_failure_restores_old_runtime(
+        self, sample_config, monkeypatch
     ):
-        """未设置的环境变量占位符应允许页面直接填写 key."""
-        monkeypatch.delenv("NONEXISTENT_ENV_VAR_12345", raising=False)
-        toml = """\
-[server]
-host = "127.0.0.1"
-port = 9456
+        router = Router(sample_config, http_client=None)
+        old_config = router.config
+        new_config = old_config.model_copy(deep=True)
+        new_config.router.failure_threshold = 1
+        original_configure = router.provider_gate.configure_from_models
+        calls = 0
 
-[providers.p1]
-type = "anthropic"
-api_key = "${NONEXISTENT_ENV_VAR_12345}"
-base_url = "https://api.anthropic.com"
+        def fail_once(models):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("gate failed")
+            original_configure(models)
 
-[[models.m1]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path, allow_unresolved_api_keys=True)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                resp = await ac.get("/api/config")
-                assert resp.status_code == 200
-                provider = resp.json()["providers"]["p1"]
-                assert provider["api_key"] == ""
-                assert provider["has_key"] is False
-                assert provider["api_key_unresolved"] is True
-        finally:
-            path.unlink(missing_ok=True)
+        monkeypatch.setattr(router.provider_gate, "configure_from_models", fail_once)
 
-    @pytest.mark.asyncio
-    async def test_put_config_priority_change(self, store):
-        """修改优先级后热重载生效."""
-        toml = """\
-[server]
-host = "127.0.0.1"
-port = 9456
+        with pytest.raises(RuntimeError, match="gate failed"):
+            await router.reload_config(new_config)
 
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[providers.p2]
-type = "anthropic"
-api_key = "sk-test2"
-base_url = "https://api2.anthropic.com"
-
-[[models.mymodel]]
-provider = "p1"
-model = "model-a"
-priority = 1
-input_price_per_million = 1.5
-output_price_per_million = 6.0
-
-[[models.mymodel]]
-provider = "p2"
-model = "model-b"
-priority = 2
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                # 初始: p1 优先
-                resp = await ac.get("/api/config/models")
-                models = resp.json()
-                assert models["mymodel"]["providers"][0]["provider"] == "p1"
-                assert (
-                    models["mymodel"]["providers"][0]["input_price_per_million"] == 1.5
-                )
-
-                # 交换优先级
-                new_body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                        "p2": {
-                            "type": "anthropic",
-                            "api_key": "sk-test2",
-                            "base_url": "https://api2.anthropic.com",
-                        },
-                    },
-                    "models": {
-                        "mymodel": {
-                            "providers": [
-                                {
-                                    "provider": "p2",
-                                    "model": "model-b",
-                                    "priority": 1,
-                                    "input_price_per_million": 2.5,
-                                },
-                                {"provider": "p1", "model": "model-a", "priority": 2},
-                            ],
-                        },
-                    },
-                }
-                resp = await ac.put("/api/config", json=new_body)
-                assert resp.status_code == 200
-
-                # 热重载后优先级已变化
-                resp = await ac.get("/api/config/models")
-                models = resp.json()
-                assert models["mymodel"]["providers"][0]["provider"] == "p2"
-                assert (
-                    models["mymodel"]["providers"][0]["input_price_per_million"] == 2.5
-                )
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_put_missing_models_preserves_existing(self, store):
-        """PUT body 缺少 models 时应保留已有模型配置."""
-        path = _write_toml(_TOML_TEMPLATE.format(model_name="keep-me"))
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                # body 不含 models
-                body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                    },
-                }
-                resp = await ac.put("/api/config", json=body)
-                assert resp.status_code == 200
-
-                # 模型应保留
-                resp = await ac.get("/v1/models")
-                data = resp.json()["data"]
-                assert len(data) == 1
-                assert data[0]["id"] == "keep-me"
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_put_missing_router_preserves_existing(self, store):
-        """PUT body 缺少 router 时应保留已有 router 配置."""
-        toml = """\
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[router]
-failure_threshold = 10
-recovery_timeout = 300.0
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[[models.m1]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                # body 不含 router
-                body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                    },
-                    "models": {
-                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
-                    },
-                }
-                resp = await ac.put("/api/config", json=body)
-                assert resp.status_code == 200
-
-                # 验证 router 段保留
-                resp = await ac.get("/api/config")
-                cfg = resp.json()
-                assert cfg["router"]["failure_threshold"] == 10
-                assert cfg["router"]["recovery_timeout"] == 300.0
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_put_new_provider_with_masked_key_rejected(self, store):
-        """新建 provider 用脱敏 api_key 应返回 400."""
-        path = _write_toml(_TOML_TEMPLATE.format(model_name="m1"))
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                        "new-provider": {
-                            "type": "anthropic",
-                            "api_key": "sk-a****-xy",  # 脱敏值
-                            "base_url": "https://new.api.com",
-                        },
-                    },
-                    "models": {
-                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
-                    },
-                }
-                resp = await ac.put("/api/config", json=body)
-                assert resp.status_code == 400
-                assert "new-provider" in resp.json()["detail"]
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_reload_updates_circuit_breaker_thresholds(self, store):
-        """热重载后熔断器阈值应同步更新."""
-        toml = """\
-[server]
-host = "127.0.0.1"
-port = 9456
-
-[router]
-failure_threshold = 5
-recovery_timeout = 600.0
-
-[providers.p1]
-type = "anthropic"
-api_key = "sk-test"
-base_url = "https://api.anthropic.com"
-
-[[models.m1]]
-provider = "p1"
-model = "m1"
-priority = 1
-"""
-        path = _write_toml(toml)
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                # 修改 router 阈值
-                body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "router": {
-                        "failure_threshold": 3,
-                        "recovery_timeout": 120.0,
-                    },
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                    },
-                    "models": {
-                        "m1": [{"provider": "p1", "model": "m1", "priority": 1}],
-                    },
-                }
-                resp = await ac.put("/api/config", json=body)
-                assert resp.status_code == 200
-
-                # 重新加载配置验证阈值已更新
-                new_config = load_config(path)
-                assert new_config.router.failure_threshold == 3
-                assert new_config.router.recovery_timeout == 120.0
-        finally:
-            path.unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_put_config_skips_empty_model_tables(self, store):
-        """空 providers 的模型不应写出裸 [models.x]，以免热重载失败."""
-        path = _write_toml(_TOML_TEMPLATE.format(model_name="keep-me"))
-        try:
-            config = load_config(path)
-            app = create_app(config, store, config_path=str(path))
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
-                body = {
-                    "server": {"host": "127.0.0.1", "port": 9456},
-                    "providers": {
-                        "p1": {
-                            "type": "anthropic",
-                            "api_key": "sk-test",
-                            "base_url": "https://api.anthropic.com",
-                        },
-                    },
-                    "models": {
-                        "keep-me": [
-                            {"provider": "p1", "model": "keep-me", "priority": 1},
-                        ],
-                        "gone": {"providers": []},
-                        "also-gone": [],
-                    },
-                }
-                resp = await ac.put("/api/config", json=body)
-                assert resp.status_code == 200
-
-                written = path.read_text()
-                assert "[models.gone]" not in written
-                assert "[models.also-gone]" not in written
-                assert "[models.keep-me]" in written
-
-                models = (await ac.get("/v1/models")).json()["data"]
-                ids = {m["id"] for m in models}
-                assert ids == {"keep-me"}
-        finally:
-            path.unlink(missing_ok=True)
+        assert router.config is old_config
+        assert (
+            router.circuit_breaker.failure_threshold
+            == old_config.router.failure_threshold
+        )
 
 
-def test_write_toml_always_emits_utf8_under_non_utf8_locale(monkeypatch, tmp_path):
-    """_write_toml 必须始终写 UTF-8（TOML 规范要求）。
+class TestConfigApi:
+    async def _client(self, path: Path, store):
+        config = load_config(path)
+        app = create_app(config, store, config_path=str(path))
+        return app, AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        )
 
-    在中文 Windows 上，文本模式 open() 的默认编码是 cp936/GBK。若 _write_toml
-    未显式指定 encoding="utf-8"，含中文（provider/model 名等）的配置会被写成
-    GBK，紧随其后的 tomllib UTF-8 校验回读即报：
-      写入配置失败: 'utf-8' codec can't decode byte 0xbb ...
+    async def test_get_endpoints_return_canonical_catalog(self, tmp_path, store):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        async with client:
+            full = (await client.get("/api/config")).json()
+            providers = (await client.get("/api/config/providers")).json()
+            models = (await client.get("/api/config/models")).json()
 
-    这里用 monkeypatch 强制一个非 UTF-8 的默认编码，使该回归在任意平台
-    （含 Linux CI，其默认即 UTF-8）都能被捕获。
-    """
-    import builtins
+        assert full["providers"]["p1"]["api_key"] != "sk-provider-one"
+        assert set(providers["p1"]["models"]) == {"shared", "other"}
+        assert models["router"]["pinned_model"] == {
+            "provider": "p1",
+            "model": "shared",
+        }
+        assert models["router"]["models"][1] == {
+            "provider": "p2",
+            "model": "shared",
+        }
 
-    real_open = builtins.open
+    async def test_put_writes_only_new_format_and_preserves_masked_key(
+        self, tmp_path, store
+    ):
+        path = _write_config(tmp_path)
+        app, client = await self._client(path, store)
+        body = _raw_config()
+        body["providers"]["p1"]["api_key"] = "sk-p**********-one"
+        body["router"]["mode"] = "failover"
+        body["models"]["router"]["pinned_model"] = None
+        body["models"]["router"]["models"].reverse()
 
-    def fake_open(file, mode="r", *args, encoding=None, **kwargs):
-        # 仅在未显式指定 encoding 的文本模式下注入 GBK，模拟中文 Windows 默认
-        if encoding is None and "b" not in mode:
-            encoding = "gbk"
-        return real_open(file, mode, *args, encoding=encoding, **kwargs)
+        async with client:
+            response = await client.put("/api/config", json=body)
 
-    monkeypatch.setattr(builtins, "open", fake_open)
+        assert response.status_code == 200, response.text
+        written = path.read_text(encoding="utf-8")
+        parsed = tomllib.loads(written)
+        assert "[[models.router.providers]]" not in written
+        assert "priority" not in written
+        assert parsed["providers"]["p1"]["api_key"] == "sk-provider-one"
+        assert [
+            provider.name
+            for provider in app.state.router_engine.config.models["router"].providers
+        ] == ["p2", "p1"]
+        _assert_no_temp_file(path)
 
-    from agent_router.api.config import _write_toml
+    async def test_get_payload_can_be_put_back_without_readonly_key_metadata(
+        self, tmp_path, store
+    ):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
 
-    config_path = tmp_path / "config.toml"
-    data = {
-        "server": {"host": "127.0.0.1", "port": 9456},
-        "providers": {
-            "智谱": {
-                "type": "anthropic",
-                "api_key": "sk-test",
-                "base_url": "https://api.z.ai/api/anthropic",
-            },
-        },
-        "models": {
-            "opus-router": {
-                "pinned_provider": "智谱",
-                "pinned_model": "glm-5.2",
-                "providers": [
-                    {"provider": "智谱", "model": "glm-5.2", "priority": 1},
-                ],
-            },
-        },
+        async with client:
+            body = (await client.get("/api/config")).json()
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 200, response.text
+        providers = tomllib.loads(path.read_text(encoding="utf-8"))["providers"]
+        assert providers["p1"]["api_key"] == "sk-provider-one"
+        assert "has_key" not in providers["p1"]
+        assert "api_key_unresolved" not in providers["p1"]
+
+    async def test_put_rejects_unknown_reference_before_touching_file(
+        self, tmp_path, store, monkeypatch
+    ):
+        path = _write_config(tmp_path)
+        original = path.read_bytes()
+        app, client = await self._client(path, store)
+        old_runtime = app.state.router_engine.config
+        logging_calls: list[dict] = []
+        monkeypatch.setattr(
+            app_module,
+            "reconfigure_logging",
+            lambda **kwargs: logging_calls.append(kwargs),
+        )
+        body = _raw_config()
+        body["models"]["router"]["models"][0]["model"] = "missing"
+
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 400
+        assert path.read_bytes() == original
+        assert app.state.router_engine.config is old_runtime
+        assert logging_calls == []
+        _assert_no_temp_file(path)
+
+    async def test_provider_deletion_conflict_has_fixed_409_contract(
+        self, tmp_path, store
+    ):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        body = _raw_config()
+        del body["providers"]["p2"]
+
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error == {
+            "code": "provider_in_use",
+            "provider": "p2",
+            "referenced_by": ["router"],
+        }
+        assert "model" not in error
+
+    async def test_actual_model_deletion_conflict_has_fixed_409_contract(
+        self, tmp_path, store
+    ):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        body = _raw_config()
+        del body["providers"]["p1"]["models"]["shared"]
+
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "error": {
+                "code": "model_in_use",
+                "provider": "p1",
+                "model": "shared",
+                "referenced_by": ["router"],
+            }
+        }
+
+    async def test_reference_removal_must_be_saved_before_model_deletion(
+        self, tmp_path, store
+    ):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        remove_reference = _raw_config()
+        remove_reference["models"]["router"]["models"] = [
+            {"provider": "p2", "model": "shared"}
+        ]
+        remove_reference["models"]["router"]["pinned_model"] = {
+            "provider": "p2",
+            "model": "shared",
+        }
+
+        async with client:
+            first = await client.put("/api/config", json=remove_reference)
+            delete_model = deepcopy(remove_reference)
+            del delete_model["providers"]["p1"]["models"]["shared"]
+            second = await client.put("/api/config", json=delete_model)
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert (
+            "shared" not in tomllib.loads(path.read_text())["providers"]["p1"]["models"]
+        )
+
+    async def test_put_writes_utf8_under_non_utf8_locale(
+        self, tmp_path, store, monkeypatch
+    ):
+        """配置写回不应受 Windows 非 UTF-8 默认编码影响。"""
+        import builtins
+
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        body = _raw_config()
+        body["providers"]["智谱"] = body["providers"].pop("p1")
+        body["models"]["router"]["pinned_model"]["provider"] = "智谱"
+        body["models"]["router"]["models"][0]["provider"] = "智谱"
+        real_open = builtins.open
+
+        def fake_open(file, mode="r", *args, encoding=None, **kwargs):
+            if encoding is None and "b" not in mode:
+                encoding = "gbk"
+            return real_open(file, mode, *args, encoding=encoding, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 200, response.text
+        written = path.read_bytes().decode("utf-8")
+        assert "智谱" in written
+        assert '[providers."智谱"]' in written
+
+    async def test_write_failure_preserves_file_and_runtime(
+        self, tmp_path, store, monkeypatch
+    ):
+        path = _write_config(tmp_path)
+        original = path.read_bytes()
+        app, client = await self._client(path, store)
+        old_runtime = app.state.router_engine.config
+        logging_calls: list[dict] = []
+
+        def fail_write(path, content):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(config_api, "_replace_file", fail_write)
+        monkeypatch.setattr(
+            app_module,
+            "reconfigure_logging",
+            lambda **kwargs: logging_calls.append(kwargs),
+        )
+        async with client:
+            response = await client.put("/api/config", json=_raw_config())
+
+        assert response.status_code == 500
+        assert path.read_bytes() == original
+        assert app.state.router_engine.config is old_runtime
+        assert logging_calls == []
+        _assert_no_temp_file(path)
+
+    async def test_runtime_switch_failure_rolls_back_file_and_runtime(
+        self, tmp_path, store, monkeypatch
+    ):
+        path = _write_config(tmp_path)
+        original = path.read_bytes()
+        app, client = await self._client(path, store)
+        old_runtime = app.state.router_engine.config
+        logging_calls: list[dict] = []
+
+        async def fail_reload(config):
+            raise RuntimeError("router switch failed")
+
+        monkeypatch.setattr(app.state.router_engine, "reload_config", fail_reload)
+        monkeypatch.setattr(
+            app_module,
+            "reconfigure_logging",
+            lambda **kwargs: logging_calls.append(kwargs),
+        )
+        body = _raw_config()
+        body["router"]["failure_threshold"] = 2
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 500
+        assert path.read_bytes() == original
+        assert app.state.router_engine.config is old_runtime
+        assert logging_calls == []
+        _assert_no_temp_file(path)
+
+    async def test_logging_failure_rolls_back_file_router_and_logging(
+        self, tmp_path, store, monkeypatch
+    ):
+        path = _write_config(tmp_path)
+        original = path.read_bytes()
+        app, client = await self._client(path, store)
+        old_runtime = app.state.router_engine.config
+        calls: list[dict] = []
+
+        def fail_logging(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("logging switch failed")
+
+        monkeypatch.setattr(app_module, "reconfigure_logging", fail_logging)
+        body = _raw_config()
+        body["server"]["log_level"] = "debug"
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 500
+        assert [call["level"] for call in calls] == ["debug", "info"]
+        assert path.read_bytes() == original
+        assert app.state.router_engine.config is old_runtime
+        _assert_no_temp_file(path)
+
+
+def test_actual_model_definition_allows_all_prices_to_be_omitted():
+    assert ActualModelDef().model_dump() == {
+        "input_price_per_million": None,
+        "output_price_per_million": None,
+        "cache_read_price_per_million": None,
+        "cache_write_price_per_million": None,
     }
-
-    # 修复前：写入为 GBK → tomllib UTF-8 校验回读抛 UnicodeDecodeError
-    _write_toml(str(config_path), data)
-
-    raw = config_path.read_bytes()
-    text = raw.decode("utf-8")  # TOML 必须是合法 UTF-8
-    assert "智谱" in text
-    assert "[models.opus-router]" in text

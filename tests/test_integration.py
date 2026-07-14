@@ -15,10 +15,12 @@ from agent_router.app import (
 )
 from agent_router.config import (
     AppConfig,
+    ModelRef,
     ProviderConfig,
     RouterConfig,
     ServerConfig,
     VirtualModelConfig,
+    parse_config_data,
 )
 from agent_router.db import CallStore
 from agent_router.routing import Router
@@ -62,26 +64,30 @@ class TestCostCalculation:
             lambda request: httpx.Response(200, content=sse)
         )
         http_client = httpx.AsyncClient(transport=transport)
-        config = AppConfig(
-            server=ServerConfig(),
-            models={
-                "priced": VirtualModelConfig(
-                    providers=[
-                        ProviderConfig(
-                            type="anthropic",
-                            name="provider",
-                            model="real-model",
-                            api_key="test-key",
-                            base_url="https://provider.test",
-                            priority=1,
-                            input_price_per_million=2.0,
-                            output_price_per_million=8.0,
-                            cache_read_price_per_million=0.2,
-                            cache_write_price_per_million=3.0,
-                        )
-                    ]
-                )
-            },
+        config = parse_config_data(
+            {
+                "router": {"mode": "failover"},
+                "providers": {
+                    "provider": {
+                        "type": "anthropic",
+                        "api_key": "test-key",
+                        "base_url": "https://provider.test",
+                        "models": {
+                            "real-model": {
+                                "input_price_per_million": 2.0,
+                                "output_price_per_million": 8.0,
+                                "cache_read_price_per_million": 0.2,
+                                "cache_write_price_per_million": 3.0,
+                            }
+                        },
+                    }
+                },
+                "models": {
+                    "priced": {
+                        "models": [{"provider": "provider", "model": "real-model"}]
+                    }
+                },
+            }
         )
         router = Router(config, http_client)
         outcome: dict = {}
@@ -138,6 +144,7 @@ class TestCostCalculation:
         )
         config = AppConfig(
             server=ServerConfig(),
+            router=RouterConfig(mode="failover"),
             models={
                 "priced": VirtualModelConfig(
                     providers=[
@@ -350,6 +357,7 @@ class TestCostCalculation:
         )
         config = AppConfig(
             server=ServerConfig(),
+            router=RouterConfig(mode="failover"),
             models={
                 "router": VirtualModelConfig(
                     providers=[
@@ -535,8 +543,7 @@ class TestMessages:
             router=RouterConfig(mode="sticky"),
             models={
                 "m": VirtualModelConfig(
-                    pinned_provider="p1",
-                    pinned_model="m1",
+                    pinned_model=ModelRef(provider="p1", model="m1"),
                     providers=[
                         ProviderConfig(
                             type="anthropic",
@@ -590,6 +597,7 @@ class TestMessages:
         http_client = httpx.AsyncClient(transport=transport)
         config = AppConfig(
             server=ServerConfig(),
+            router=RouterConfig(mode="failover"),
             models={
                 "m": VirtualModelConfig(
                     providers=[
