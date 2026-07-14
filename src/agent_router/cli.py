@@ -1050,7 +1050,7 @@ def _model_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(entry, list):
             refs = entry
         elif isinstance(entry, dict):
-            refs = entry.get("providers", [])
+            refs = cast(dict[str, Any], entry).get("providers", [])
         else:
             continue
         if not isinstance(refs, list):

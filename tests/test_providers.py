@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import httpx
 import pytest
@@ -139,7 +140,7 @@ class TestAnthropicCompatProvider:
 
         headers = seen["headers"]
         assert isinstance(headers, dict)
-        assert headers["accept-encoding"] != "identity"
+        assert cast(dict[str, str], headers)["accept-encoding"] != "identity"
 
     @pytest.mark.asyncio
     async def test_send_stream_requests_identity_encoding(self):
@@ -176,7 +177,7 @@ class TestAnthropicCompatProvider:
         body = seen["body"]
         assert isinstance(headers, dict)
         assert isinstance(body, bytes)
-        assert headers["accept-encoding"] == "identity"
+        assert cast(dict[str, str], headers)["accept-encoding"] == "identity"
         assert json.loads(body)["stream"] is True
         assert b"".join(chunks) == b"event: message_start\ndata: {}\n\n"
 
