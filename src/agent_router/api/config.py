@@ -15,6 +15,10 @@ from agent_router.config import AppConfig, ConfigError, has_unresolved_env_var
 from agent_router.config import parse_config_data
 
 
+class RuntimeReloadError(RuntimeError):
+    """表示运行时配置切换失败，且旧运行时也未能完整恢复。"""
+
+
 def _mask_key(key: str) -> str:
     if len(key) <= 8:
         return "*" * len(key)
@@ -58,13 +62,24 @@ def _read_config_raw(config_path: str) -> dict[str, Any]:
 
 def _toml_escape(value: str) -> str:
     """转义 TOML basic string 中的特殊字符。"""
-    return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-    )
+    escapes = {
+        "\\": "\\\\",
+        '"': '\\"',
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    output: list[str] = []
+    for character in value:
+        if character in escapes:
+            output.append(escapes[character])
+        elif ord(character) <= 0x1F or ord(character) == 0x7F:
+            output.append(f"\\u{ord(character):04X}")
+        else:
+            output.append(character)
+    return "".join(output)
 
 
 def _toml_key(name: str) -> str:
@@ -182,6 +197,10 @@ def _deletion_conflict(
     """返回必须分两次保存的 Provider 或实际模型删除冲突。"""
     existing_providers = existing.get("providers", {})
     candidate_providers = candidate.get("providers", {})
+    if not isinstance(existing_providers, dict):
+        raise ConfigError("现有配置的 providers 必须是对象")
+    if not isinstance(candidate_providers, dict):
+        raise ConfigError("providers 必须是对象")
     references = _references_by_identity(existing)
 
     for provider in sorted(set(existing_providers) - set(candidate_providers)):
@@ -201,8 +220,18 @@ def _deletion_conflict(
             }
 
     for provider in sorted(set(existing_providers) & set(candidate_providers)):
-        existing_models = existing_providers[provider].get("models", {})
-        candidate_models = candidate_providers[provider].get("models", {})
+        existing_provider = existing_providers[provider]
+        candidate_provider = candidate_providers[provider]
+        if not isinstance(existing_provider, dict):
+            raise ConfigError(f"现有 Provider '{provider}' 配置必须是对象")
+        if not isinstance(candidate_provider, dict):
+            raise ConfigError(f"Provider '{provider}' 配置必须是对象")
+        existing_models = existing_provider.get("models", {})
+        candidate_models = candidate_provider.get("models", {})
+        if not isinstance(existing_models, dict):
+            raise ConfigError(f"现有 Provider '{provider}' 的 models 必须是对象")
+        if not isinstance(candidate_models, dict):
+            raise ConfigError(f"Provider '{provider}' 的 models 必须是对象")
         for model in sorted(set(existing_models) - set(candidate_models)):
             referenced_by = sorted(references.get((provider, model), set()))
             if referenced_by:
@@ -224,6 +253,8 @@ def _merge_and_preserve_keys(
             candidate[section] = deepcopy(existing.get(section, {}))
 
     existing_providers = existing.get("providers", {})
+    if not isinstance(existing_providers, dict):
+        raise ConfigError("现有配置的 providers 必须是对象")
     providers = candidate.get("providers", {})
     if not isinstance(providers, dict):
         raise ConfigError("providers 必须是对象")
@@ -237,16 +268,32 @@ def _merge_and_preserve_keys(
             continue
         if provider_name not in existing_providers:
             raise ConfigError(f"新建 Provider '{provider_name}' 需要提供有效的 api_key")
-        provider["api_key"] = existing_providers[provider_name].get("api_key", api_key)
+        existing_provider = existing_providers[provider_name]
+        if not isinstance(existing_provider, dict):
+            raise ConfigError(f"现有 Provider '{provider_name}' 配置必须是对象")
+        provider["api_key"] = existing_provider.get("api_key", api_key)
     return candidate
 
 
 def _safe_config(raw: dict[str, Any]) -> dict[str, Any]:
     safe = deepcopy(raw)
-    for provider in safe.get("providers", {}).values():
+    providers = safe.get("providers", {})
+    if not isinstance(providers, dict):
+        raise ConfigError("providers 必须是对象")
+    for provider_name, provider in providers.items():
+        if not isinstance(provider, dict):
+            raise ConfigError(f"Provider '{provider_name}' 配置必须是对象")
         if "api_key" in provider:
             provider.update(_safe_key_fields(str(provider["api_key"])))
     return safe
+
+
+def _read_safe_config(config_path: str) -> dict[str, Any]:
+    """Read a config document and return its API-key-safe representation."""
+    try:
+        return _safe_config(_read_config_raw(config_path))
+    except ConfigError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def create_config_router(
@@ -259,18 +306,18 @@ def create_config_router(
     @router.get("/api/config")
     async def get_config():
         """返回完整规范配置，并对 api_key 脱敏。"""
-        return _safe_config(_read_config_raw(config_path))
+        return _read_safe_config(config_path)
 
     @router.get("/api/config/providers")
     async def list_providers():
         """返回包含实际模型目录的 Provider 配置，并对 api_key 脱敏。"""
-        raw = _safe_config(_read_config_raw(config_path))
+        raw = _read_safe_config(config_path)
         return raw.get("providers", {})
 
     @router.get("/api/config/models")
     async def list_models():
         """返回有序 ModelRef 与单一结构化 pinned_model。"""
-        return deepcopy(_read_config_raw(config_path).get("models", {}))
+        return _read_config_raw(config_path).get("models", {})
 
     @router.put("/api/config")
     async def update_config(body: dict[str, Any]):
@@ -284,9 +331,6 @@ def create_config_router(
             conflict = _deletion_conflict(existing, candidate)
             if conflict is not None:
                 return JSONResponse(status_code=409, content={"error": conflict})
-            runtime_config = parse_config_data(
-                candidate, allow_unresolved_api_keys=True
-            )
             content = _serialize_toml(candidate)
             round_trip = tomllib.loads(content)
             runtime_config = parse_config_data(
@@ -314,9 +358,11 @@ def create_config_router(
                         "运行时切换失败，且配置文件回滚失败: "
                         f"{exc}; rollback: {rollback_exc}",
                     ) from exc
-                raise HTTPException(
-                    500, f"运行时切换失败，配置文件与运行时已回滚: {exc}"
-                ) from exc
+                if isinstance(exc, RuntimeReloadError):
+                    detail = f"运行时切换失败，配置文件已回滚，但运行时回滚失败: {exc}"
+                else:
+                    detail = f"运行时切换失败，配置文件与运行时已回滚: {exc}"
+                raise HTTPException(500, detail) from exc
 
         return {"status": "ok", "message": "配置已更新并热重载"}
 

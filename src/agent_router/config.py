@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
-from copy import deepcopy
+from math import isfinite
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +20,13 @@ _PRICE_FIELDS = (
     "cache_read_price_per_million",
     "cache_write_price_per_million",
 )
+
+
+def _validate_non_negative_price(value: float | None) -> float | None:
+    """Return a finite, non-negative model price or raise a validation error."""
+    if value is not None and (not isfinite(value) or value < 0):
+        raise ValueError("模型费用必须大于等于 0 且为有限值")
+    return value
 
 
 class ConfigError(ValueError):
@@ -44,10 +51,8 @@ class ActualModelDef(BaseModel):
     @field_validator(*_PRICE_FIELDS)
     @classmethod
     def non_negative_price(cls, value: float | None) -> float | None:
-        """Validate that configured token prices are non-negative."""
-        if value is not None and value < 0:
-            raise ValueError("模型费用必须大于等于 0")
-        return value
+        """Validate that configured token prices are finite and non-negative."""
+        return _validate_non_negative_price(value)
 
 
 class ProviderDef(BaseModel):
@@ -170,10 +175,8 @@ class ProviderConfig(BaseModel):
     @field_validator(*_PRICE_FIELDS)
     @classmethod
     def non_negative_price(cls, value: float | None) -> float | None:
-        """Validate that configured token prices are non-negative."""
-        if value is not None and value < 0:
-            raise ValueError("模型费用必须大于等于 0")
-        return value
+        """Validate that configured token prices are finite and non-negative."""
+        return _validate_non_negative_price(value)
 
 
 class VirtualModelConfig(BaseModel):
@@ -242,8 +245,12 @@ def _reject_legacy_model_format(raw: dict[str, Any]) -> None:
     for virtual_name, entry in models.items():
         if isinstance(entry, list) or (
             isinstance(entry, dict)
-            and any(
-                field in entry for field in ("providers", "pinned_provider", "priority")
+            and (
+                isinstance(entry.get("pinned_model"), str)
+                or any(
+                    field in entry
+                    for field in ("providers", "pinned_provider", "priority")
+                )
             )
         ):
             raise ConfigError(
@@ -267,7 +274,7 @@ def parse_config_document(raw: dict[str, Any]) -> ConfigDocument:
     """
     _reject_legacy_model_format(raw)
     try:
-        return ConfigDocument.model_validate(_expand_env_vars(deepcopy(raw)))
+        return ConfigDocument.model_validate(_expand_env_vars(raw))
     except ValidationError as exc:
         raise ConfigError(f"配置校验失败: {exc}") from exc
 

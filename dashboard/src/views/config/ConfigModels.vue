@@ -52,17 +52,7 @@ const dragPreviewRow = computed(() => {
 
 watch(
   models,
-  (current) => {
-    for (const m of Object.values(current)) {
-      const pinValid = m.models.some(
-        (row) =>
-          row.provider === m.pinned_model?.provider && row.model === m.pinned_model?.model,
-      );
-      if (pinValid) continue;
-      const first = m.models[0];
-      m.pinned_model = first ? { ...first } : null;
-    }
-  },
+  () => store.ensureStickyPins(),
   { deep: true, immediate: true },
 );
 
@@ -384,23 +374,30 @@ function isPinned(model: string, idx: number) {
           ⠿
         </button>
         <span class="prio mono">#{{ idx + 1 }}</span>
-        <select :value="optionId(row)" @change="selectRef(name, idx, $event)">
-          <option disabled value="">选择实际模型</option>
-          <optgroup
-            v-for="group in actualModelGroups"
-            :key="group.provider"
-            :label="group.provider"
+        <label class="model-picker" title="更换实际模型">
+          <span>选择模型</span>
+          <select
+            :value="optionId(row)"
+            :aria-label="`为 ${name} 选择实际模型`"
+            @change="selectRef(name, idx, $event)"
           >
-            <option
-              v-for="option in group.options"
-              :key="option.id"
-              :value="option.id"
-              :disabled="optionDisabled(name, idx, option)"
+            <option disabled value="">选择实际模型</option>
+            <optgroup
+              v-for="group in actualModelGroups"
+              :key="group.provider"
+              :label="group.provider"
             >
-              {{ option.label }}
-            </option>
-          </optgroup>
-        </select>
+              <option
+                v-for="option in group.options"
+                :key="option.id"
+                :value="option.id"
+                :disabled="optionDisabled(name, idx, option)"
+              >
+                {{ option.label }}
+              </option>
+            </optgroup>
+          </select>
+        </label>
         <span class="actual-model mono">{{ row.provider }}/{{ row.model }}</span>
         <div class="ref-actions">
           <button
@@ -441,11 +438,7 @@ function isPinned(model: string, idx: number) {
     >
       <button class="drag-handle" type="button" disabled>⠿</button>
       <span class="prio mono">#{{ draggingRef.index + 1 }}</span>
-      <select :value="optionId(dragPreviewRow)" disabled>
-        <option :value="optionId(dragPreviewRow)">
-          {{ dragPreviewRow.provider }}/{{ dragPreviewRow.model }}
-        </option>
-      </select>
+      <span class="model-picker model-picker-disabled">选择模型</span>
       <span class="actual-model mono">{{ dragPreviewRow.provider }}/{{ dragPreviewRow.model }}</span>
       <div class="ref-actions">
         <button
@@ -482,7 +475,7 @@ function isPinned(model: string, idx: number) {
 .tiny { margin: 0.25rem 0 0; font-size: 0.8rem; }
 .ref-row {
   display: grid;
-  grid-template-columns: 28px 40px 140px 1fr auto;
+  grid-template-columns: 28px 40px 96px minmax(0, 1fr) auto;
   gap: 0.5rem;
   align-items: center;
   position: relative;
@@ -541,13 +534,48 @@ function isPinned(model: string, idx: number) {
   grid-column: 1 / -1;
   margin: 0;
 }
-.ref-row select,
 .ref-row input {
   min-height: 34px;
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
+}
+.model-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.model-picker:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.model-picker:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.model-picker select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.model-picker-disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .actual-model {
   min-width: 0;

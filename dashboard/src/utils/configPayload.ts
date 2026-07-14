@@ -209,12 +209,7 @@ export function buildPutPayload(
     void _unresolved;
     const actualModels: Record<string, ActualModelConfig> = {};
     for (const [modelName, actualModel] of Object.entries(provider.models)) {
-      actualModels[modelName] = {
-        input_price_per_million: optionalPrice(actualModel.input_price_per_million),
-        output_price_per_million: optionalPrice(actualModel.output_price_per_million),
-        cache_read_price_per_million: optionalPrice(actualModel.cache_read_price_per_million),
-        cache_write_price_per_million: optionalPrice(actualModel.cache_write_price_per_million),
-      };
+      actualModels[modelName] = normalizeActualModel(actualModel);
     }
     providers[name] = {
       ...rest,

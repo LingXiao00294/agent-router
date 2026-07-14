@@ -200,8 +200,10 @@ class TestConfigDomainModel:
         with pytest.raises(ConfigError, match="实际模型名不能为空"):
             parse_config_data(raw)
 
-    @pytest.mark.parametrize("price", [-0.01, float("-inf")])
-    def test_rejects_negative_actual_model_price(self, price):
+    @pytest.mark.parametrize(
+        "price", [-0.01, float("-inf"), float("inf"), float("nan")]
+    )
+    def test_rejects_non_finite_or_negative_actual_model_price(self, price):
         raw = _raw_config()
         raw["providers"]["p1"]["models"]["shared"]["input_price_per_million"] = price
 
@@ -256,6 +258,11 @@ class TestConfigDomainModel:
             parse_config_data(unknown)
         with pytest.raises(ConfigError, match="旧版配置格式"):
             parse_config_data(legacy)
+
+        string_pin = _raw_config()
+        string_pin["models"]["router"]["pinned_model"] = "shared"
+        with pytest.raises(ConfigError, match="旧版配置格式"):
+            parse_config_data(string_pin)
 
     def test_unresolved_api_key_is_strict_by_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("MISSING_PROVIDER_KEY", raising=False)
@@ -360,6 +367,29 @@ class TestConfigApi:
             "provider": "p2",
             "model": "shared",
         }
+
+    def test_toml_serializer_escapes_all_control_characters(self):
+        raw = _raw_config()
+        api_key = "key\b\t\n\f\r\x00\x1f\x7f"
+        raw["providers"]["p1"]["api_key"] = api_key
+
+        parsed = tomllib.loads(config_api._serialize_toml(raw))
+
+        assert parsed["providers"]["p1"]["api_key"] == api_key
+
+    async def test_malformed_provider_returns_actionable_400(self, tmp_path, store):
+        path = _write_config(tmp_path)
+        _, client = await self._client(path, store)
+        path.write_text('providers = { p1 = "invalid" }\n', encoding="utf-8")
+
+        async with client:
+            get_response = await client.get("/api/config")
+            put_response = await client.put("/api/config", json=_raw_config())
+
+        assert get_response.status_code == 400
+        assert "Provider 'p1' 配置必须是对象" in get_response.text
+        assert put_response.status_code == 400
+        assert "现有 Provider 'p1' 配置必须是对象" in put_response.text
 
     async def test_put_writes_only_new_format_and_preserves_masked_key(
         self, tmp_path, store
@@ -504,9 +534,7 @@ class TestConfigApi:
         path = _write_config(tmp_path)
         _, client = await self._client(path, store)
         body = _raw_config()
-        body["providers"]["智谱"] = body["providers"].pop("p1")
-        body["models"]["router"]["pinned_model"]["provider"] = "智谱"
-        body["models"]["router"]["models"][0]["provider"] = "智谱"
+        body["providers"]["p1"]["models"]["智谱模型"] = {}
         real_open = builtins.open
 
         def fake_open(file, mode="r", *args, encoding=None, **kwargs):
@@ -521,8 +549,8 @@ class TestConfigApi:
 
         assert response.status_code == 200, response.text
         written = path.read_bytes().decode("utf-8")
-        assert "智谱" in written
-        assert '[providers."智谱"]' in written
+        assert "智谱模型" in written
+        assert '[providers.p1.models."智谱模型"]' in written
 
     async def test_write_failure_preserves_file_and_runtime(
         self, tmp_path, store, monkeypatch
@@ -600,7 +628,42 @@ class TestConfigApi:
             response = await client.put("/api/config", json=body)
 
         assert response.status_code == 500
-        assert [call["level"] for call in calls] == ["debug", "info"]
+        assert [call["level"] for call in calls] == ["debug"]
+        assert path.read_bytes() == original
+        assert app.state.router_engine.config is old_runtime
+        _assert_no_temp_file(path)
+
+    async def test_runtime_rollback_failure_preserves_original_error(
+        self, tmp_path, store, monkeypatch
+    ):
+        path = _write_config(tmp_path)
+        original = path.read_bytes()
+        app, client = await self._client(path, store)
+        old_runtime = app.state.router_engine.config
+        logging_calls = 0
+
+        def fail_logging_rollback(**kwargs):
+            nonlocal logging_calls
+            logging_calls += 1
+            if logging_calls == 2:
+                raise RuntimeError("logging rollback failed")
+
+        async def fail_router_switch(config):
+            raise RuntimeError("router switch failed")
+
+        monkeypatch.setattr(app_module, "reconfigure_logging", fail_logging_rollback)
+        monkeypatch.setattr(
+            app.state.router_engine, "reload_config", fail_router_switch
+        )
+        body = _raw_config()
+        body["server"]["log_level"] = "debug"
+        async with client:
+            response = await client.put("/api/config", json=body)
+
+        assert response.status_code == 500
+        assert "router switch failed" in response.text
+        assert "logging rollback failed" in response.text
+        assert "运行时回滚失败" in response.text
         assert path.read_bytes() == original
         assert app.state.router_engine.config is old_runtime
         _assert_no_temp_file(path)

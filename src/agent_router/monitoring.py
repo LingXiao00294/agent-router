@@ -175,9 +175,6 @@ def setup_logging(
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
 
-    # 清除 structlog 全局配置与缓存，确保重复调用（含新级别/新文件）即时生效。
-    structlog.reset_defaults()
-
     shared = _shared_processors()
 
     stdout_processors = [
@@ -192,6 +189,38 @@ def setup_logging(
         JSONRenderer(),
     ]
 
+    handlers: list[logging.Handler] = []
+    try:
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(
+            ProcessorFormatter(foreign_pre_chain=shared, processors=stdout_processors)
+        )
+        # stdout 固定 INFO+：debug 配置下第三方库（httpcore/aiosqlite 等）的
+        # DEBUG 噪音不刷屏，仅以 INFO+ 业务日志进入终端；debug 全量仍写本地文件。
+        stdout_handler.setLevel(max(log_level, logging.INFO))
+        handlers.append(stdout_handler)
+
+        if log_file:
+            path = Path(log_file)
+            if path.parent and not path.parent.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                str(path),
+                maxBytes=log_max_bytes,
+                backupCount=log_backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(
+                ProcessorFormatter(foreign_pre_chain=shared, processors=json_processors)
+            )
+            handlers.append(file_handler)
+    except Exception:
+        for handler in handlers:
+            handler.close()
+        raise
+
+    # 所有新 handler 构造成功后才切换全局日志状态，避免失败时留下半配置。
+    structlog.reset_defaults()
     structlog.configure(
         processors=[*shared, ProcessorFormatter.wrap_for_formatter],
         logger_factory=LoggerFactory(),
@@ -199,32 +228,6 @@ def setup_logging(
         # 关闭缓存，保证运行时热切换日志配置对所有 logger 实例生效。
         cache_logger_on_first_use=False,
     )
-
-    handlers: list[logging.Handler] = []
-
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(
-        ProcessorFormatter(foreign_pre_chain=shared, processors=stdout_processors)
-    )
-    # stdout 固定 INFO+：debug 配置下第三方库（httpcore/aiosqlite 等）的
-    # DEBUG 噪音不刷屏，仅以 INFO+ 业务日志进入终端；debug 全量仍写本地文件。
-    stdout_handler.setLevel(max(log_level, logging.INFO))
-    handlers.append(stdout_handler)
-
-    if log_file:
-        path = Path(log_file)
-        if path.parent and not path.parent.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            str(path),
-            maxBytes=log_max_bytes,
-            backupCount=log_backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(
-            ProcessorFormatter(foreign_pre_chain=shared, processors=json_processors)
-        )
-        handlers.append(file_handler)
 
     # force=True 移除既有 handler 重新配置 root，避免热重载时 handler 累积。
     logging.basicConfig(handlers=handlers, level=log_level, force=True)

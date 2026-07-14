@@ -249,6 +249,24 @@ def test_reconfigure_closes_old_file_handlers(tmp_path):
     )
 
 
+def test_reconfigure_failure_keeps_previous_logging_active(tmp_path):
+    old_log_file = tmp_path / "old.log"
+    invalid_parent = tmp_path / "not-a-directory"
+    invalid_parent.write_text("file", encoding="utf-8")
+    monitoring.setup_logging("info", log_file=str(old_log_file))
+    old_handlers = list(logging.getLogger().handlers)
+
+    with pytest.raises(OSError):
+        monitoring.reconfigure_logging(
+            "debug", log_file=str(invalid_parent / "new.log")
+        )
+
+    assert logging.getLogger().handlers == old_handlers
+    structlog.get_logger("t").info("old.logging.still.active")
+    _flush()
+    assert "old.logging.still.active" in old_log_file.read_text(encoding="utf-8")
+
+
 def test_log_file_optional_stdout_only(tmp_path, capsys):
     """log_file 为空时只输出到 stdout，不创建文件 handler。"""
     monitoring.setup_logging("info", log_file="")

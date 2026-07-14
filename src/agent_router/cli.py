@@ -1037,6 +1037,9 @@ def _provider_ref_counts(raw: dict[str, Any]) -> dict[str, int]:
         refs = entry.get("models", [])
         if not isinstance(refs, list):
             continue
+        pinned_model = entry.get("pinned_model")
+        if isinstance(pinned_model, dict) and pinned_model not in refs:
+            refs = [*refs, pinned_model]
         for ref in refs:
             if isinstance(ref, dict) and "provider" in ref:
                 provider = str(ref["provider"])

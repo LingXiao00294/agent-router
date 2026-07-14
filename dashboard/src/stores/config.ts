@@ -68,6 +68,20 @@ export const useConfigStore = defineStore("config", () => {
     return buildPutPayload(draft.value, models.value, maskedApiKeys.value);
   }
 
+  function ensureStickyPins() {
+    if (draft.value?.router.mode !== "sticky") return;
+    for (const virtualModel of Object.values(models.value)) {
+      const pinValid = virtualModel.models.some(
+        (model) =>
+          model.provider === virtualModel.pinned_model?.provider &&
+          model.model === virtualModel.pinned_model?.model,
+      );
+      if (pinValid) continue;
+      const first = virtualModel.models[0];
+      virtualModel.pinned_model = first ? { ...first } : null;
+    }
+  }
+
   /** Reuse the active request so callers always initialize one consistent draft. */
   function load(): Promise<void> {
     if (loadPromise) return loadPromise;
@@ -112,6 +126,7 @@ export const useConfigStore = defineStore("config", () => {
       fieldErrors.value = { _: "配置未加载" };
       return false;
     }
+    ensureStickyPins();
     const s = draft.value.server;
     if (!s.host.trim()) errs["server.host"] = "host 不能为空";
     if (!Number.isFinite(s.port) || s.port < 1 || s.port > 65535) {
@@ -231,7 +246,7 @@ export const useConfigStore = defineStore("config", () => {
         }
         seen.add(identity);
       });
-      if (draft.value.router.mode === "sticky") {
+      if (draft.value.router.mode === "sticky" && m.models.length > 0) {
         const ok =
           m.pinned_model &&
           m.models.some(
@@ -396,6 +411,14 @@ export const useConfigStore = defineStore("config", () => {
     return [];
   }
 
+  function addActualModel(provider: string, model: string): boolean {
+    const providerConfig = draft.value?.providers[provider];
+    const name = model.trim();
+    if (!providerConfig || !name || providerConfig.models[name]) return false;
+    providerConfig.models[name] = {};
+    return true;
+  }
+
   function addModel(name: string) {
     if (!name.trim() || models.value[name]) return;
     models.value[name] = {
@@ -437,8 +460,10 @@ export const useConfigStore = defineStore("config", () => {
     setRouterMode,
     validate,
     buildPayload,
+    ensureStickyPins,
     addProvider,
     removeProvider,
+    addActualModel,
     removeActualModel,
     addModel,
     removeModel,

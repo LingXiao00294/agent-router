@@ -403,3 +403,16 @@ def test_typer_usage_errors_do_not_render_tracebacks(capsys):
     assert "Traceback" not in combined
     assert "NoArgsIsHelpError" not in combined
     assert "MissingParameter" not in combined
+
+
+def test_provider_ref_counts_include_distinct_failover_pin():
+    raw = {
+        "models": {
+            "router": {
+                "pinned_model": {"provider": "pinned", "model": "special"},
+                "models": [{"provider": "primary", "model": "regular"}],
+            }
+        }
+    }
+
+    assert cli._provider_ref_counts(raw) == {"primary": 1, "pinned": 1}

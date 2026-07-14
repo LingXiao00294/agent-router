@@ -4,7 +4,7 @@ import { storeToRefs } from "pinia";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
 import { useOverlayChrome } from "@/composables/useOverlayChrome";
-import type { ProviderConfig, ProviderType } from "@/api/types";
+import type { ActualModelConfig, ProviderConfig, ProviderType } from "@/api/types";
 import { isBlankOrPlaceholderKey } from "@/utils/configPayload";
 
 const store = useConfigStore();
@@ -13,6 +13,12 @@ const { draft, fieldErrors } = storeToRefs(store);
 const newName = ref("");
 const editing = ref<string | null>(null);
 const modalRef = ref<HTMLElement | null>(null);
+const editingModelProvider = ref<string | null>(null);
+const editingModelName = ref<string | null>(null);
+const modelNameDraft = ref("");
+const modelDraft = ref<ActualModelConfig>({});
+const modelError = ref("");
+const modelModalRef = ref<HTMLElement | null>(null);
 
 const providerEntries = computed(() => {
   if (!draft.value) return [] as { name: string; p: ProviderConfig }[];
@@ -26,6 +32,8 @@ const editingProvider = computed(() => {
 
 const modalOpen = computed(() => Boolean(editing.value && editingProvider.value));
 useOverlayChrome(modalOpen, modalRef);
+const modelModalOpen = computed(() => editingModelProvider.value !== null);
+useOverlayChrome(modelModalOpen, modelModalRef);
 
 watch(newName, (value) => {
   if (fieldErrors.value.providers !== "名称已存在") return;
@@ -52,6 +60,78 @@ function openEdit(name: string) {
 
 function closeEdit() {
   editing.value = null;
+}
+
+function openNewActualModel(provider: string) {
+  editingModelProvider.value = provider;
+  editingModelName.value = null;
+  modelNameDraft.value = "";
+  modelDraft.value = {};
+  modelError.value = "";
+}
+
+function openActualModel(provider: string, model: string) {
+  const actualModel = draft.value?.providers[provider]?.models[model];
+  if (!actualModel) return;
+  editingModelProvider.value = provider;
+  editingModelName.value = model;
+  modelNameDraft.value = model;
+  modelDraft.value = { ...actualModel };
+  modelError.value = "";
+}
+
+function closeActualModel() {
+  editingModelProvider.value = null;
+  editingModelName.value = null;
+  modelNameDraft.value = "";
+  modelDraft.value = {};
+  modelError.value = "";
+}
+
+function setOptionalPrice(field: keyof ActualModelConfig, event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  modelDraft.value[field] = value === "" ? undefined : Number(value);
+}
+
+function saveActualModel() {
+  const provider = editingModelProvider.value;
+  if (!provider || !draft.value?.providers[provider]) return;
+  const name = modelNameDraft.value.trim();
+  if (!name) {
+    modelError.value = "实际模型名不能为空";
+    return;
+  }
+  const prices = Object.values(modelDraft.value);
+  if (prices.some((price) => price != null && (!Number.isFinite(price) || price < 0))) {
+    modelError.value = "费用需为 ≥ 0 的数字或留空";
+    return;
+  }
+  if (editingModelName.value === null && !store.addActualModel(provider, name)) {
+    modelError.value = "同一 Provider 下的实际模型名不能重复";
+    return;
+  }
+  draft.value.providers[provider].models[name] = { ...modelDraft.value };
+  const errorKey = `providers.${provider}.models.${name}`;
+  const nextErrors = { ...fieldErrors.value };
+  delete nextErrors[errorKey];
+  fieldErrors.value = nextErrors;
+  closeActualModel();
+}
+
+async function removeActualModel(provider: string, model: string) {
+  const ok = await confirm.confirm({
+    title: "删除实际模型",
+    message: `确定删除「${provider}/${model}」？`,
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!ok) return;
+  const referencedBy = store.removeActualModel(provider, model);
+  if (referencedBy.length) {
+    modelError.value = `仍被虚拟模型引用：${referencedBy.join("、")}。请先保存引用移除。`;
+    return;
+  }
+  closeActualModel();
 }
 
 async function remove(name: string) {
@@ -100,7 +180,11 @@ function keyOk(p: ProviderConfig) {
 }
 
 function onModalKey(e: KeyboardEvent) {
-  if (e.key === "Escape" && editing.value) {
+  if (e.key !== "Escape") return;
+  if (modelModalOpen.value) {
+    e.preventDefault();
+    closeActualModel();
+  } else if (editing.value) {
     e.preventDefault();
     closeEdit();
   }
@@ -139,11 +223,27 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
             >
               {{ keyLabel(p) }}
             </span>
+            <span class="badge badge-muted">{{ Object.keys(p.models).length }} 个模型</span>
             <span v-if="hasFieldError(name)" class="badge badge-danger">校验</span>
           </div>
           <div class="row-sub mono muted">{{ shortUrl(p.base_url) }}</div>
+          <div v-if="Object.keys(p.models).length" class="model-summary">
+            <button
+              v-for="model in Object.keys(p.models)"
+              :key="model"
+              class="model-chip mono"
+              type="button"
+              @click.stop="openActualModel(name, model)"
+            >
+              {{ name }}/{{ model }}
+            </button>
+          </div>
+          <div v-else class="row-sub muted">尚未配置实际模型</div>
         </div>
         <div class="row-actions">
+          <button class="btn btn-sm" type="button" @click="openNewActualModel(name)">
+            添加模型
+          </button>
           <button class="btn btn-sm" type="button" @click="openEdit(name)">编辑</button>
           <button class="btn btn-sm btn-danger" type="button" @click="remove(name)">删除</button>
         </div>
@@ -263,6 +363,92 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
         </div>
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <div v-if="editingModelProvider" class="overlay" @click.self="closeActualModel">
+        <div
+          ref="modelModalRef"
+          class="modal model-modal panel"
+          role="dialog"
+          aria-modal="true"
+          tabindex="-1"
+          :aria-label="editingModelName ? `编辑 ${editingModelProvider}/${editingModelName}` : `添加 ${editingModelProvider} 实际模型`"
+        >
+          <header class="modal-head">
+            <div>
+              <h3>{{ editingModelName ? "编辑实际模型" : "添加实际模型" }}</h3>
+              <p class="mono muted">{{ editingModelProvider }}</p>
+            </div>
+            <button class="btn btn-sm" type="button" @click="closeActualModel">关闭</button>
+          </header>
+
+          <div class="grid">
+            <div class="field span2">
+              <label>模型名</label>
+              <input
+                v-model="modelNameDraft"
+                class="mono"
+                :readonly="editingModelName !== null"
+                placeholder="例如 claude-sonnet-4-5"
+              />
+            </div>
+            <div class="field">
+              <label>input_price_per_million</label>
+              <input
+                :value="modelDraft.input_price_per_million ?? ''"
+                type="number"
+                min="0"
+                step="any"
+                @input="setOptionalPrice('input_price_per_million', $event)"
+              />
+            </div>
+            <div class="field">
+              <label>output_price_per_million</label>
+              <input
+                :value="modelDraft.output_price_per_million ?? ''"
+                type="number"
+                min="0"
+                step="any"
+                @input="setOptionalPrice('output_price_per_million', $event)"
+              />
+            </div>
+            <div class="field">
+              <label>cache_read_price_per_million</label>
+              <input
+                :value="modelDraft.cache_read_price_per_million ?? ''"
+                type="number"
+                min="0"
+                step="any"
+                @input="setOptionalPrice('cache_read_price_per_million', $event)"
+              />
+            </div>
+            <div class="field">
+              <label>cache_write_price_per_million</label>
+              <input
+                :value="modelDraft.cache_write_price_per_million ?? ''"
+                type="number"
+                min="0"
+                step="any"
+                @input="setOptionalPrice('cache_write_price_per_million', $event)"
+              />
+            </div>
+            <p v-if="modelError" class="err span2">{{ modelError }}</p>
+          </div>
+
+          <footer class="modal-foot" :class="{ 'align-end': !editingModelName }">
+            <button
+              v-if="editingModelName"
+              class="btn btn-danger"
+              type="button"
+              @click="removeActualModel(editingModelProvider, editingModelName)"
+            >
+              删除
+            </button>
+            <button class="btn btn-primary" type="button" @click="saveActualModel">保存</button>
+          </footer>
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -330,6 +516,32 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   white-space: nowrap;
 }
 
+.model-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.model-chip {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.18rem 0.45rem;
+  color: var(--text-muted);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.model-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .row-actions {
   display: flex;
   gap: 0.35rem;
@@ -359,6 +571,10 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   padding: 0;
   overflow: hidden;
   animation: modal-in 0.18s ease;
+}
+
+.model-modal {
+  width: min(600px, 100%);
 }
 
 @keyframes modal-in {
@@ -409,6 +625,10 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   gap: 0.5rem;
   padding: 0.85rem 1.1rem;
   border-top: 1px solid var(--border);
+}
+
+.modal-foot.align-end {
+  justify-content: flex-end;
 }
 
 @media (max-width: 640px) {

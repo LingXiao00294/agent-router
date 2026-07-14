@@ -25,23 +25,23 @@ uv run ruff check src tests                # Lint
 uv run ty check src tests                 # 类型检查
 
 # 前端 Dashboard
-cd dashboard && npm run dev                # 开发模式 (Vite 代理后端到 127.0.0.1:9456)
-cd dashboard && npm run build              # 生产构建 → dashboard/dist/
+cd dashboard && bun run dev                # 开发模式 (Vite 代理后端到 127.0.0.1:9456)
+cd dashboard && bun run build              # 生产构建 → dashboard/dist/
 ```
 
 ## 架构
 
 ### 配置层 (`config.py`)
 
-- `config.toml` 定义 `[server]`、`[router]`、`[providers.*]`、`[models.*]` + `[[models.*.providers]]`
-- 旧格式 `[[models.*]]` list 仍可读，写入统一为新格式
+- `config.toml` 定义 `[server]`、`[router]`、Provider 下的实际模型目录和 `[models.*]` 有序引用
+- 旧版 `[[models.*.providers]]`、显式 `priority`、`pinned_provider` 与字符串 `pinned_model` 会返回迁移错误，不再兼容
 - `${ENV_VAR}` 在加载时通过 `os.path.expandvars` 展开
-- 虚拟模型 → `VirtualModelConfig`（可选 `pinned_*` + 按 priority 排序的 `providers`）
-- `[router].mode`：`sticky`（默认）时各虚拟模型钉死各自的 `pinned_provider`+`pinned_model`，任何失败都不转移；`failover` 按 priority 故障转移
+- 虚拟模型 → `VirtualModelConfig`（单一结构化 `pinned_model` + 按数组顺序生成优先级的 `providers`）
+- `[router].mode`：`sticky`（默认）时各虚拟模型只使用模型链内的 `pinned_model`，任何失败都不转移；`failover` 按数组顺序故障转移，允许 pin 为空
 - `[router]` 另含全局默认 `failure_threshold`（默认 5）和 `recovery_timeout`（默认 600s）
 - 每个 provider 可单独设置 `failure_threshold`/`recovery_timeout`/`timeout_seconds`，以及本地限流：`max_concurrent`（0=不限）、`max_queue`（0=不排）、`queue_wait_timeout`、`rate_limit_cooldown`
 - provider `name` 字段来自 TOML 中的 `[providers.<name>]` 键，无需显式填写
-- `load_config` 校验失败时调用 `sys.exit(1)`；热重载时 app 层捕获 `SystemExit` 转为 `RuntimeError`，保留旧配置不变
+- `load_config` 校验失败时抛 `ConfigError`；CLI 入口负责转为退出码，配置 API 返回可操作的 400 错误
 - `.env` 和 `config.toml` 已在 `.gitignore` 中，不会提交
 
 ### 路由层 (`routing.py`)
@@ -116,7 +116,7 @@ cd dashboard && npm run build              # 生产构建 → dashboard/dist/
 
 - Vue 3 + Vite + TypeScript + ECharts + Vue Router
 - 页面: Dashboard（统计卡片、模型图表、调用表格、趋势图）、Config（配置管理）
-- 仪表盘顶部通过“故障转移”开关切换全局 failover/sticky；虚拟模型缺失 pin 时默认选择第一优先级引用；Providers 卡片可配置本地限流字段
+- 仪表盘顶部通过“故障转移”开关切换全局 failover/sticky；虚拟模型缺失 pin 时默认选择第一优先级引用；Providers 页面可管理连接、本地限流、实际模型目录及四类价格
 - 开发时 Vite dev server 将 `/api`、`/health`、`/v1` 代理到后端
 
 ## 测试

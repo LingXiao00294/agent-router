@@ -119,19 +119,15 @@ class Router:
         self.provider_gate.configure_from_models(config.models)
 
     async def reload_config(self, new_config: AppConfig) -> None:
-        """热重载配置，失败时恢复旧配置并保留运行状态。"""
-        old_config = self.config
-        try:
-            self.provider_gate.configure_from_models(new_config.models)
-            self.circuit_breaker.failure_threshold = new_config.router.failure_threshold
-            self.circuit_breaker.recovery_timeout = new_config.router.recovery_timeout
-            self.config = new_config
-        except Exception:
-            self.provider_gate.configure_from_models(old_config.models)
-            self.circuit_breaker.failure_threshold = old_config.router.failure_threshold
-            self.circuit_breaker.recovery_timeout = old_config.router.recovery_timeout
-            self.config = old_config
-            raise
+        """热重载已校验配置，同时保留连接、熔断与冷却状态。"""
+        self._apply_config(new_config)
+
+    def _apply_config(self, config: AppConfig) -> None:
+        """Apply runtime settings after the provider gate accepts the config."""
+        self.provider_gate.configure_from_models(config.models)
+        self.circuit_breaker.failure_threshold = config.router.failure_threshold
+        self.circuit_breaker.recovery_timeout = config.router.recovery_timeout
+        self.config = config
 
     def _virtual_model(self, name: str) -> VirtualModelConfig:
         if name not in self.config.models:
