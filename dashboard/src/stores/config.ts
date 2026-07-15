@@ -383,11 +383,15 @@ export const useConfigStore = defineStore("config", () => {
 
   function referencedBy(provider: string, model?: string): string[] {
     return Object.entries(models.value)
-      .filter(([, virtualModel]) =>
-        virtualModel.models.some(
+      .filter(([, virtualModel]) => {
+        const referencedInModels = virtualModel.models.some(
           (ref) => ref.provider === provider && (model == null || ref.model === model),
-        ),
-      )
+        );
+        const pinnedModel = virtualModel.pinned_model;
+        const referencedByPin =
+          pinnedModel?.provider === provider && (model == null || pinnedModel.model === model);
+        return referencedInModels || referencedByPin;
+      })
       .map(([name]) => name);
   }
 
