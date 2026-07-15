@@ -25,20 +25,21 @@ type = "anthropic"
 api_key = "sk-secret-1111"
 base_url = "https://api.one.test"
 
+[providers.p1.models.sonnet-first]
+
 [providers.p2]
 type = "anthropic"
 api_key = "sk-secret-2222"
 base_url = "https://api.two.test"
 
-[[models.sonnet-router]]
-provider = "p2"
-model = "sonnet-second"
-priority = 2
+[providers.p2.models.sonnet-second]
 
-[[models.sonnet-router]]
-provider = "p1"
-model = "sonnet-first"
-priority = 1
+[models.sonnet-router]
+pinned_model = { provider = "p1", model = "sonnet-first" }
+models = [
+  { provider = "p1", model = "sonnet-first" },
+  { provider = "p2", model = "sonnet-second" },
+]
 """,
         encoding="utf-8",
     )
@@ -248,10 +249,11 @@ type = "anthropic"
 api_key = "${MISSING_API_KEY_FOR_STARTUP_TEST}"
 base_url = "https://api.one.test"
 
-[[models.sonnet-router]]
-provider = "p1"
-model = "sonnet-first"
-priority = 1
+[providers.p1.models.sonnet-first]
+
+[models.sonnet-router]
+pinned_model = { provider = "p1", model = "sonnet-first" }
+models = [{ provider = "p1", model = "sonnet-first" }]
 """,
         encoding="utf-8",
     )
@@ -401,3 +403,16 @@ def test_typer_usage_errors_do_not_render_tracebacks(capsys):
     assert "Traceback" not in combined
     assert "NoArgsIsHelpError" not in combined
     assert "MissingParameter" not in combined
+
+
+def test_provider_ref_counts_include_distinct_failover_pin():
+    raw = {
+        "models": {
+            "router": {
+                "pinned_model": {"provider": "pinned", "model": "special"},
+                "models": [{"provider": "primary", "model": "regular"}],
+            }
+        }
+    }
+
+    assert cli._provider_ref_counts(raw) == {"primary": 1, "pinned": 1}

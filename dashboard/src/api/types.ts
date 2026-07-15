@@ -125,29 +125,38 @@ export interface ProviderConfig {
   rate_limit_cooldown?: number;
   has_key?: boolean;
   api_key_unresolved?: boolean;
+  models: Record<string, ActualModelConfig>;
 }
 
-export interface ModelRef {
-  provider: string;
-  model: string;
-  priority: number;
+export interface ActualModelConfig {
   input_price_per_million?: number;
   output_price_per_million?: number;
   cache_read_price_per_million?: number;
   cache_write_price_per_million?: number;
 }
 
+export interface ModelRef {
+  provider: string;
+  model: string;
+}
+
 export interface VirtualModelConfig {
-  pinned_provider?: string | null;
-  pinned_model?: string | null;
-  providers: ModelRef[];
+  pinned_model: ModelRef | null;
+  models: ModelRef[];
 }
 
 export interface AppConfig {
   server: ServerConfig;
   router: RouterConfig;
   providers: Record<string, ProviderConfig>;
-  models: Record<string, VirtualModelConfig | ModelRef[]>;
+  models: Record<string, VirtualModelConfig>;
+}
+
+export interface ConfigReferenceError {
+  code: "provider_in_use" | "model_in_use";
+  provider: string;
+  model?: string;
+  referenced_by: string[];
 }
 
 export type CircuitBreakerMap = Record<string, CircuitState>;

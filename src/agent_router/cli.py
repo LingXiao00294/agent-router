@@ -18,7 +18,12 @@ import uvicorn
 from click import ClickException
 from dotenv import load_dotenv
 
-from agent_router.config import AppConfig, has_unresolved_env_var, load_config
+from agent_router.config import (
+    AppConfig,
+    ConfigError,
+    has_unresolved_env_var,
+    load_config,
+)
 from agent_router.dashboard import (
     DEFAULT_ROUTER_URL,
     create_dashboard_app,
@@ -868,8 +873,9 @@ def _load_config(
             ),
             0,
         )
-    except SystemExit as exc:
-        return None, _system_exit_code(exc)
+    except ConfigError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return None, 1
 
 
 def _unresolved_runtime_providers(config: AppConfig) -> list[str]:
@@ -988,8 +994,8 @@ def _print_model_routes(config: AppConfig) -> None:
     for virtual_model, vm in config.models.items():
         chain = " -> ".join(f"{p.name}:{p.model}(p{p.priority})" for p in vm.providers)
         pin = (
-            f" [pin={vm.pinned_provider}:{vm.pinned_model}]"
-            if vm.pinned_provider and vm.pinned_model
+            f" [pin={vm.pinned_model.provider}:{vm.pinned_model.model}]"
+            if vm.pinned_model is not None
             else ""
         )
         print(f"  {virtual_model}{pin}: {chain}")
@@ -1026,14 +1032,14 @@ def _provider_ref_counts(raw: dict[str, Any]) -> dict[str, int]:
     if not isinstance(models, dict):
         return counts
     for entry in models.values():
-        if isinstance(entry, list):
-            refs = entry
-        elif isinstance(entry, dict):
-            refs = entry.get("providers", [])
-        else:
+        if not isinstance(entry, dict):
             continue
+        refs = entry.get("models", [])
         if not isinstance(refs, list):
             continue
+        pinned_model = entry.get("pinned_model")
+        if isinstance(pinned_model, dict) and pinned_model not in refs:
+            refs = [*refs, pinned_model]
         for ref in refs:
             if isinstance(ref, dict) and "provider" in ref:
                 provider = str(ref["provider"])
@@ -1047,22 +1053,19 @@ def _model_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     rows: list[dict[str, Any]] = []
     for virtual_model, entry in sorted(models.items()):
-        if isinstance(entry, list):
-            refs = entry
-        elif isinstance(entry, dict):
-            refs = cast(dict[str, Any], entry).get("providers", [])
-        else:
+        if not isinstance(entry, dict):
             continue
+        refs = cast(dict[str, Any], entry).get("models", [])
         if not isinstance(refs, list):
             continue
         model_refs = [
             cast(dict[str, Any], ref) for ref in refs if isinstance(ref, dict)
         ]
-        for model_ref in sorted(model_refs, key=lambda item: item.get("priority", 99)):
+        for index, model_ref in enumerate(model_refs):
             rows.append(
                 {
                     "virtual_model": virtual_model,
-                    "priority": model_ref.get("priority", "-"),
+                    "priority": index + 1,
                     "provider": model_ref.get("provider", "-"),
                     "model": model_ref.get("model", "-"),
                 }

@@ -165,112 +165,112 @@ ModelRef + ProviderDef + ActualModelDef + array index
 
 ### 配置领域模型
 
-- [ ] 新增 `ActualModelDef`，集中保存四类价格。
-- [ ] 在 `ProviderDef` 中新增 `models: dict[str, ActualModelDef]`。
-- [ ] 新增只包含 `provider` 与 `model` 的 `ModelRef`。
-- [ ] 将虚拟模型配置改为 `models: list[ModelRef]`。
-- [ ] 删除虚拟模型引用上的四类价格字段。
-- [ ] 删除配置文件中的显式 `priority`；数组顺序决定优先级。
-- [ ] 使用单一的 `pinned_model: ModelRef | null`，不再保存独立的 `pinned_provider`。
-- [ ] 将原始配置对象和运行时解析后的 `ProviderConfig` 明确分层。
-- [ ] 通过 `(provider, model)` 建立实际模型索引。
-- [ ] 解析时合并 Provider 连接配置、实际模型价格和数组优先级。
-- [ ] 保持 Router 消费完整的运行时 `ProviderConfig`，不让路由层反查原始配置。
+- [x] 新增 `ActualModelDef`，集中保存四类价格。
+- [x] 在 `ProviderDef` 中新增 `models: dict[str, ActualModelDef]`。
+- [x] 新增只包含 `provider` 与 `model` 的 `ModelRef`。
+- [x] 将虚拟模型配置改为 `models: list[ModelRef]`。
+- [x] 删除虚拟模型引用上的四类价格字段。
+- [x] 删除配置文件中的显式 `priority`；数组顺序决定优先级。
+- [x] 使用单一的 `pinned_model: ModelRef | null`，不再保存独立的 `pinned_provider`。
+- [x] 将原始配置对象和运行时解析后的 `ProviderConfig` 明确分层。
+- [x] 通过 `(provider, model)` 建立实际模型索引。
+- [x] 解析时合并 Provider 连接配置、实际模型价格和数组优先级。
+- [x] 保持 Router 消费完整的运行时 `ProviderConfig`，不让路由层反查原始配置。
 
 ### 配置校验
 
-- [ ] 校验每个 `ModelRef.provider` 都存在。
-- [ ] 校验每个 `ModelRef.model` 都定义在对应 Provider 下。
-- [ ] 校验同一虚拟模型不能重复引用相同的 `(provider, model)`。
-- [ ] 校验 Provider 下的实际模型名非空且在该 Provider 内唯一。
-- [ ] 校验四类价格均可省略；存在时必须为非负数。
-- [ ] Sticky 模式校验 `pinned_model` 非空，并且完整的 `{ provider, model }` 引用位于模型链中。
-- [ ] 空 Provider 模型目录允许保存。
-- [ ] 虚拟模型必须至少选择一个实际模型。
-- [ ] 未知字段和旧版 `[[models.<name>.providers]]` 格式返回清晰的配置错误。
-- [ ] 底层配置解析使用结构化异常，不在可复用解析逻辑中直接 `sys.exit()`。
+- [x] 校验每个 `ModelRef.provider` 都存在。
+- [x] 校验每个 `ModelRef.model` 都定义在对应 Provider 下。
+- [x] 校验同一虚拟模型不能重复引用相同的 `(provider, model)`。
+- [x] 校验 Provider 下的实际模型名非空且在该 Provider 内唯一。
+- [x] 校验四类价格均可省略；存在时必须为非负数。
+- [x] Sticky 模式校验 `pinned_model` 非空，并且完整的 `{ provider, model }` 引用位于模型链中。
+- [x] 空 Provider 模型目录允许保存。
+- [x] 虚拟模型必须至少选择一个实际模型。
+- [x] 未知字段和旧版 `[[models.<name>.providers]]` 格式返回清晰的配置错误。
+- [x] 底层配置解析使用结构化异常，不在可复用解析逻辑中直接 `sys.exit()`。
 
 ### 引用完整性
 
-- [ ] 删除 Provider 前检查所有虚拟模型引用。
-- [ ] 删除实际模型前检查所有虚拟模型的模型链和结构化 `pinned_model`。
-- [ ] 被引用时拒绝删除，并返回引用该对象的虚拟模型名称。
-- [ ] 后端校验必须独立于 Dashboard，直接调用 API 也不能写入悬空引用。
-- [ ] 第一版不提供实际模型原地重命名接口。
-- [ ] 删除保护比较现有配置与候选配置；必须先单独保存引用移除，再允许删除 Provider 或实际模型。
+- [x] 删除 Provider 前检查所有虚拟模型引用。
+- [x] 删除实际模型前检查所有虚拟模型的模型链和结构化 `pinned_model`。
+- [x] 被引用时拒绝删除，并返回引用该对象的虚拟模型名称。
+- [x] 后端校验必须独立于 Dashboard，直接调用 API 也不能写入悬空引用。
+- [x] 第一版不提供实际模型原地重命名接口。
+- [x] 删除保护比较现有配置与候选配置；必须先单独保存引用移除，再允许删除 Provider 或实际模型。
 
 ### 配置 API 与热重载
 
-- [ ] 更新 `GET /api/config` 返回新规范结构并继续脱敏 API key。
-- [ ] 更新 `GET /api/config/providers`，包含 Provider 的实际模型目录。
-- [ ] 更新 `GET /api/config/models`，返回有序 `ModelRef` 和单一结构化 `pinned_model`。
-- [ ] 更新 `PUT /api/config` 的规范化、密钥保留和引用校验。
-- [ ] 固定删除保护的 HTTP 契约：
-  - [ ] 状态码为 `HTTP 409 Conflict`。
-  - [ ] 响应包络为 `{"error": {...}}`。
-  - [ ] `error.code = "provider_in_use" | "model_in_use"`。
-  - [ ] `error.provider` 始终提供。
-  - [ ] `error.model` 只在删除实际模型时提供；删除 Provider 时省略该字段，不返回 `null`。
-  - [ ] `error.referenced_by: string[]` 列出引用它的虚拟模型。
-- [ ] TOML 写回只生成目标新格式。
-- [ ] 在触碰现有文件前完成候选配置校验、TOML 序列化验证和运行时配置构建。
-- [ ] 候选配置准备完成后，先原子写回 TOML，再切换 Router。
-- [ ] 写盘、运行时切换或日志重配置任一步失败时，回滚文件与运行时状态，确保两者仍为旧配置。
-- [ ] 为写盘失败、候选构建失败、运行时切换失败和日志重配置失败增加回滚测试。
-- [ ] 每个回滚测试断言 TOML 内容、Router 配置和日志配置仍为旧状态，且没有遗留临时文件。
-- [ ] 不实现旧配置自动迁移或兼容读取。
+- [x] 更新 `GET /api/config` 返回新规范结构并继续脱敏 API key。
+- [x] 更新 `GET /api/config/providers`，包含 Provider 的实际模型目录。
+- [x] 更新 `GET /api/config/models`，返回有序 `ModelRef` 和单一结构化 `pinned_model`。
+- [x] 更新 `PUT /api/config` 的规范化、密钥保留和引用校验。
+- [x] 固定删除保护的 HTTP 契约：
+  - [x] 状态码为 `HTTP 409 Conflict`。
+  - [x] 响应包络为 `{"error": {...}}`。
+  - [x] `error.code = "provider_in_use" | "model_in_use"`。
+  - [x] `error.provider` 始终提供。
+  - [x] `error.model` 只在删除实际模型时提供；删除 Provider 时省略该字段，不返回 `null`。
+  - [x] `error.referenced_by: string[]` 列出引用它的虚拟模型。
+- [x] TOML 写回只生成目标新格式。
+- [x] 在触碰现有文件前完成候选配置校验、TOML 序列化验证和运行时配置构建。
+- [x] 候选配置准备完成后，先原子写回 TOML，再切换 Router。
+- [x] 写盘、运行时切换或日志重配置任一步失败时，回滚文件与运行时状态，确保两者仍为旧配置。
+- [x] 为写盘失败、候选构建失败、运行时切换失败和日志重配置失败增加回滚测试。
+- [x] 每个回滚测试断言 TOML 内容、Router 配置和日志配置仍为旧状态，且没有遗留临时文件。
+- [x] 不实现旧配置自动迁移或兼容读取。
 
 ### Dashboard 数据层与功能适配
 
-- [ ] 更新 TypeScript 的 `ProviderConfig`、`ActualModelConfig`、`ModelRef` 和 `VirtualModelConfig`。
-- [ ] 更新配置 normalize、draft、dirty check 和 PUT payload。
-- [ ] 更新前端引用完整性校验。
-- [ ] 虚拟模型页移除价格输入。
-- [ ] 虚拟模型页移除自由输入的模型名。
-- [ ] 使用一个组合选择器选择实际模型，标签为 `<provider>/<model>`。
-- [ ] 选择器选项按 Provider 分组。
-- [ ] 添加引用时只创建结构化 `{ provider, model }`。
-- [ ] 拖动顺序保存为 `models` 数组顺序。
-- [ ] Pin 保存为一个完整的结构化 `ModelRef`，不拆分为两个配置字段。
-- [ ] 当前虚拟模型已选择的实际模型不能重复选择。
-- [ ] 消费固定的 `provider_in_use` / `model_in_use` 错误契约并展示 `referenced_by`。
-- [ ] 本 PR 完成虚拟模型页面的全部功能切换；PR 3 不再重复修改其数据结构、选择规则或校验行为。
+- [x] 更新 TypeScript 的 `ProviderConfig`、`ActualModelConfig`、`ModelRef` 和 `VirtualModelConfig`。
+- [x] 更新配置 normalize、draft、dirty check 和 PUT payload。
+- [x] 更新前端引用完整性校验。
+- [x] 虚拟模型页移除价格输入。
+- [x] 虚拟模型页移除自由输入的模型名。
+- [x] 使用一个组合选择器选择实际模型，标签为 `<provider>/<model>`。
+- [x] 选择器选项按 Provider 分组。
+- [x] 添加引用时只创建结构化 `{ provider, model }`。
+- [x] 拖动顺序保存为 `models` 数组顺序。
+- [x] Pin 保存为一个完整的结构化 `ModelRef`，不拆分为两个配置字段。
+- [x] 当前虚拟模型已选择的实际模型不能重复选择。
+- [x] 消费固定的 `provider_in_use` / `model_in_use` 错误契约并展示 `referenced_by`。
+- [x] 本 PR 完成虚拟模型页面的全部功能切换；PR 3 不再重复修改其数据结构、选择规则或校验行为。
 
 ### 数据库集成
 
-- [ ] 调用成功时使用解析后的 `ActualModelDef` 价格生成 PR 1 定义的价格快照。
-- [ ] 确保配置目录调价只影响后续调用，不改写历史记录。
+- [x] 调用成功时使用解析后的 `ActualModelDef` 价格生成 PR 1 定义的价格快照。
+- [x] 确保配置目录调价只影响后续调用，不改写历史记录。
 
 ### 测试
 
-- [ ] 测试新 TOML 格式加载。
-- [ ] 测试 Provider 下多个实际模型。
-- [ ] 测试同一实际模型被多个虚拟模型引用。
-- [ ] 测试数组顺序正确生成运行时优先级。
-- [ ] 测试未知 Provider、未知模型和重复引用。
-- [ ] 测试结构化 `pinned_model` 的加载、写回和 Sticky 校验。
-- [ ] 测试被引用 Provider/模型的删除保护。
-- [ ] 分别测试删除 Provider 和实际模型时的 HTTP 409、响应包络、字段省略规则与 `referenced_by`。
-- [ ] 测试 Provider 下空模型名被拒绝。
-- [ ] 测试配置 API 读写和热重载。
-- [ ] 测试旧配置明确失败且错误信息可操作。
-- [ ] 测试价格从 Provider 模型目录进入调用记录。
-- [ ] 测试 Dashboard 类型检查和生产构建。
+- [x] 测试新 TOML 格式加载。
+- [x] 测试 Provider 下多个实际模型。
+- [x] 测试同一实际模型被多个虚拟模型引用。
+- [x] 测试数组顺序正确生成运行时优先级。
+- [x] 测试未知 Provider、未知模型和重复引用。
+- [x] 测试结构化 `pinned_model` 的加载、写回和 Sticky 校验。
+- [x] 测试被引用 Provider/模型的删除保护。
+- [x] 分别测试删除 Provider 和实际模型时的 HTTP 409、响应包络、字段省略规则与 `referenced_by`。
+- [x] 测试 Provider 下空模型名被拒绝。
+- [x] 测试配置 API 读写和热重载。
+- [x] 测试旧配置明确失败且错误信息可操作。
+- [x] 测试价格从 Provider 模型目录进入调用记录。
+- [x] 测试 Dashboard 类型检查和生产构建。
 
 ### 文档与示例
 
-- [ ] 将 `config.toml.example` 完整切换到新格式。
-- [ ] 更新 README 的 Provider、实际模型和虚拟模型配置示例。
-- [ ] 更新 `docs/design.md` 的领域模型、配置结构、解析流程和引用完整性规则。
-- [ ] 明确这是 breaking change，不提供旧配置兼容。
+- [x] 将 `config.toml.example` 完整切换到新格式。
+- [x] 更新 README 的 Provider、实际模型和虚拟模型配置示例。
+- [x] 更新 `docs/design.md` 的领域模型、配置结构、解析流程和引用完整性规则。
+- [x] 明确这是 breaking change，不提供旧配置兼容。
 
 ### 验收标准
 
-- [ ] 实际模型与价格只在 Provider 下定义一次。
-- [ ] 虚拟模型只包含有序的实际模型引用和一个结构化 `pinned_model`。
-- [ ] 任意悬空引用都无法通过后端校验或写入磁盘。
-- [ ] Router 的 sticky、failover、熔断、冷却和流式行为保持现有语义。
-- [ ] 后端测试、Ruff、格式、ty 和 Dashboard 构建通过。
+- [x] 实际模型与价格只在 Provider 下定义一次。
+- [x] 虚拟模型只包含有序的实际模型引用和一个结构化 `pinned_model`。
+- [x] 任意悬空引用都无法通过后端校验或写入磁盘。
+- [x] Router 的 sticky、failover、熔断、冷却和流式行为保持现有语义。
+- [x] 后端测试、Ruff、格式、ty 和 Dashboard 构建通过。
 
 ---
 
@@ -285,31 +285,31 @@ ModelRef + ProviderDef + ActualModelDef + array index
 ### Provider 卡片
 
 - [ ] 将 Provider 列表行改为与虚拟模型页面一致的卡片布局。
-- [ ] 卡片展示 Provider 名称、类型、密钥状态和简化后的 Base URL。
-- [ ] 卡片小字展示实际模型数量与模型名。
+- [x] 卡片展示 Provider 名称、类型、密钥状态和简化后的 Base URL。
+- [x] 卡片小字展示实际模型数量与模型名。
 - [ ] 模型较多时显示有限数量并追加“还有 N 个”。
-- [ ] 卡片提供“添加模型”“设置”“删除”操作。
-- [ ] 无实际模型时显示明确的空状态。
+- [x] 卡片提供“添加模型”“设置”“删除”操作。
+- [x] 无实际模型时显示明确的空状态。
 
 ### Provider 设置弹窗
 
-- [ ] 保留现有 Provider 基础设置字段。
-- [ ] Provider 设置弹窗不直接承担实际模型表单。
-- [ ] 保留 API key 脱敏值、留空保留和新 Provider 必填规则。
-- [ ] 保留限流、队列、超时和熔断覆盖配置。
+- [x] 保留现有 Provider 基础设置字段。
+- [x] Provider 设置弹窗不直接承担实际模型表单。
+- [x] 保留 API key 脱敏值、留空保留和新 Provider 必填规则。
+- [x] 保留限流、队列、超时和熔断覆盖配置。
 
 ### 实际模型弹窗
 
-- [ ] 点击“添加模型”打开空白实际模型弹窗。
-- [ ] 点击卡片中的实际模型名打开编辑弹窗。
+- [x] 点击“添加模型”打开空白实际模型弹窗。
+- [x] 点击卡片中的实际模型名打开编辑弹窗。
 - [ ] 弹窗显示统一展示名 `<provider>/<model>`。
-- [ ] 新建实际模型时允许填写模型名和四类价格。
-- [ ] 编辑已有实际模型时模型名只读，只允许修改四类价格。
-- [ ] 模型改名严格使用“新建模型、切换引用、删除旧模型”流程，不在编辑弹窗内伪装成原地重命名。
-- [ ] 校验模型名非空且在同一 Provider 下唯一。
-- [ ] 校验价格为空或非负数。
-- [ ] 已被引用的模型不允许直接重命名。
-- [ ] 删除被引用模型时展示引用它的虚拟模型并保持数据不变。
+- [x] 新建实际模型时允许填写模型名和四类价格。
+- [x] 编辑已有实际模型时模型名只读，只允许修改四类价格。
+- [x] 模型改名严格使用“新建模型、切换引用、删除旧模型”流程，不在编辑弹窗内伪装成原地重命名。
+- [x] 校验模型名非空且在同一 Provider 下唯一。
+- [x] 校验价格为空或非负数。
+- [x] 已被引用的模型不允许直接重命名。
+- [x] 删除被引用模型时展示引用它的虚拟模型并保持数据不变。
 - [ ] 删除未被引用模型前显示确认弹窗。
 
 ### 虚拟模型页面
@@ -344,10 +344,10 @@ ModelRef + ProviderDef + ActualModelDef + array index
 
 ### 验收标准
 
-- [ ] Provider 页面是 Dashboard 内管理实际模型的唯一入口；用户仍可直接编辑作为配置真源的 `config.toml`。
-- [ ] Provider 卡片无需打开弹窗即可看见已配置模型摘要。
-- [ ] 虚拟模型页面只能从已有实际模型目录中选择。
-- [ ] 页面中实际模型统一展示为 `<provider>/<model>`。
+- [x] Provider 页面是 Dashboard 内管理实际模型的唯一入口；用户仍可直接编辑作为配置真源的 `config.toml`。
+- [x] Provider 卡片无需打开弹窗即可看见已配置模型摘要。
+- [x] 虚拟模型页面只能从已有实际模型目录中选择。
+- [x] 页面中实际模型统一展示为 `<provider>/<model>`。
 - [ ] 用户无法通过 Dashboard 产生重复引用或悬空引用。
 - [ ] Dashboard 构建通过，并完成主要页面人工视觉检查。
 
@@ -377,12 +377,12 @@ cd dashboard
 bun run build
 ```
 
-- [ ] Python 命令全部通过 `uv` 执行。
-- [ ] JavaScript/TypeScript 命令全部通过 `bun` 执行。
-- [ ] 如全项目存在与当前 PR 无关的既有错误，记录具体文件和诊断，不擅自扩大修改范围。
-- [ ] 执行 `git diff --check`。
-- [ ] 检查 `git status`、`git diff`；如有暂存内容再检查 `git diff --cached`。
-- [ ] 最终汇报实际修改文件、关键命令、测试结果、文档状态、分支、提交和未完成事项。
+- [x] Python 命令全部通过 `uv` 执行。
+- [x] JavaScript/TypeScript 命令全部通过 `bun` 执行。
+- [x] 如全项目存在与当前 PR 无关的既有错误，记录具体文件和诊断，不擅自扩大修改范围。
+- [x] 执行 `git diff --check`。
+- [x] 检查 `git status`、`git diff`；如有暂存内容再检查 `git diff --cached`。
+- [x] 最终汇报实际修改文件、关键命令、测试结果、文档状态、分支、提交和未完成事项。
 
 ## 整体完成标准
 

@@ -2,18 +2,35 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import tomllib
+from math import isfinite
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # 运行日志默认值（ServerConfig 与 monitoring.setup_logging 共用，避免多处字面量漂移）。
 DEFAULT_LOG_FILE = "logs/agent-router.log"
 DEFAULT_LOG_MAX_BYTES = 10_000_000
 DEFAULT_LOG_BACKUP_COUNT = 5
 _UNRESOLVED_ENV_RE = re.compile(r"\$\{[^}]+}")
+_PRICE_FIELDS = (
+    "input_price_per_million",
+    "output_price_per_million",
+    "cache_read_price_per_million",
+    "cache_write_price_per_million",
+)
+
+
+def _validate_non_negative_price(value: float | None) -> float | None:
+    """Return a finite, non-negative model price or raise a validation error."""
+    if value is not None and (not isfinite(value) or value < 0):
+        raise ValueError("模型费用必须大于等于 0 且为有限值")
+    return value
+
+
+class ConfigError(ValueError):
+    """表示配置文件无法解析为当前版本的结构化配置。"""
 
 
 def has_unresolved_env_var(value: str) -> bool:
@@ -21,8 +38,27 @@ def has_unresolved_env_var(value: str) -> bool:
     return bool(_UNRESOLVED_ENV_RE.search(value))
 
 
+class ActualModelDef(BaseModel):
+    """Provider 目录中的实际模型定义。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    cache_read_price_per_million: float | None = None
+    cache_write_price_per_million: float | None = None
+
+    @field_validator(*_PRICE_FIELDS)
+    @classmethod
+    def non_negative_price(cls, value: float | None) -> float | None:
+        """Validate that configured token prices are finite and non-negative."""
+        return _validate_non_negative_price(value)
+
+
 class ProviderDef(BaseModel):
-    """Provider 基础定义 — 每个 provider 只配置一次."""
+    """Provider 连接设置及其实际模型目录。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["anthropic", "openai"]
     api_key: str
@@ -35,39 +71,83 @@ class ProviderDef(BaseModel):
     max_queue: int = 0
     queue_wait_timeout: float = 30.0
     rate_limit_cooldown: float = 30.0
+    models: dict[str, ActualModelDef] = Field(default_factory=dict)
 
     @field_validator("api_key")
     @classmethod
-    def api_key_must_not_be_empty(cls, v: str) -> str:
-        if not v:
+    def api_key_must_not_be_empty(cls, value: str) -> str:
+        if not value:
             raise ValueError("api_key 不能为空")
-        return v
+        return value
 
     @field_validator("base_url")
     @classmethod
-    def strip_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
+    def strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
     @field_validator("max_concurrent", "max_queue")
     @classmethod
-    def non_negative_int(cls, v: int) -> int:
-        if v < 0:
+    def non_negative_int(cls, value: int) -> int:
+        if value < 0:
             raise ValueError("必须大于等于 0")
-        return v
+        return value
 
     @field_validator("queue_wait_timeout", "rate_limit_cooldown")
     @classmethod
-    def positive_float(cls, v: float) -> float:
-        if v <= 0:
+    def positive_float(cls, value: float) -> float:
+        if value <= 0:
             raise ValueError("必须大于 0")
-        return v
+        return value
+
+    @field_validator("models")
+    @classmethod
+    def actual_model_names_must_not_be_blank(
+        cls, models: dict[str, ActualModelDef]
+    ) -> dict[str, ActualModelDef]:
+        blank_names = [name for name in models if not name.strip()]
+        if blank_names:
+            raise ValueError("实际模型名不能为空")
+        return models
+
+
+class ModelRef(BaseModel):
+    """以结构化字段标识一个 Provider 下的实际模型。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str
+    model: str
+
+    @field_validator("provider", "model")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("不能为空")
+        return value
+
+
+class VirtualModelDef(BaseModel):
+    """配置文件中的虚拟模型及其有序实际模型引用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pinned_model: ModelRef | None = None
+    models: list[ModelRef] = Field(min_length=1)
+
+    @field_validator("models")
+    @classmethod
+    def model_refs_must_be_unique(cls, refs: list[ModelRef]) -> list[ModelRef]:
+        seen: set[tuple[str, str]] = set()
+        for ref in refs:
+            identity = (ref.provider, ref.model)
+            if identity in seen:
+                raise ValueError(f"不能重复引用实际模型 '{ref.provider}/{ref.model}'")
+            seen.add(identity)
+        return refs
 
 
 class ProviderConfig(BaseModel):
-    """解析后的 provider 配置 (ProviderDef + ModelProviderRef 合并).
-
-    供 routing.py 和 providers 使用，外部无需关心此类型。
-    """
+    """Provider 连接设置、实际模型价格与运行时优先级的解析结果。"""
 
     type: Literal["anthropic", "openai"]
     name: str = ""
@@ -89,48 +169,26 @@ class ProviderConfig(BaseModel):
 
     @field_validator("base_url")
     @classmethod
-    def strip_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
+    def strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
-    @field_validator(
-        "input_price_per_million",
-        "output_price_per_million",
-        "cache_read_price_per_million",
-        "cache_write_price_per_million",
-    )
+    @field_validator(*_PRICE_FIELDS)
     @classmethod
-    def non_negative_price(cls, v: float | None) -> float | None:
-        """Validate that configured token prices are non-negative."""
-        if v is not None and v < 0:
-            raise ValueError("模型费用必须大于等于 0")
-        return v
+    def non_negative_price(cls, value: float | None) -> float | None:
+        """Validate that configured token prices are finite and non-negative."""
+        return _validate_non_negative_price(value)
 
 
 class VirtualModelConfig(BaseModel):
-    """虚拟模型：可选指定 provider + provider 链.
+    """Router 直接消费的虚拟模型运行时配置。"""
 
-    pinned_* 在全局 router.mode=sticky 时生效；failover 模式下保留但不使用。
-    """
-
-    pinned_provider: str | None = None
-    pinned_model: str | None = None
+    pinned_model: ModelRef | None = None
     providers: list[ProviderConfig]
-
-    @model_validator(mode="after")
-    def validate_pin_pair(self) -> VirtualModelConfig:
-        """为缺失的 pin 选择第一优先级模型，并校验 pin 成对出现。"""
-        if not self.pinned_provider and not self.pinned_model:
-            if self.providers:
-                first = min(self.providers, key=lambda provider: provider.priority)
-                self.pinned_provider = first.name
-                self.pinned_model = first.model
-            return self
-        if not self.pinned_provider or not self.pinned_model:
-            raise ValueError("pinned_provider 与 pinned_model 必须同时设置")
-        return self
 
 
 class ServerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     host: str = "127.0.0.1"
     port: int = 9456
     log_level: Literal["debug", "info", "warning", "error"] = "info"
@@ -141,238 +199,219 @@ class ServerConfig(BaseModel):
 
 
 class RouterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     failure_threshold: int = 5
     recovery_timeout: float = 600.0
-    # 全局路由模式：failover=按 priority 故障转移；sticky=各虚拟模型钉死 pinned 项
+    # failover=按数组顺序故障转移；sticky=各虚拟模型只使用 pinned_model。
     mode: Literal["failover", "sticky"] = "sticky"
 
 
-class AppConfig(BaseModel):
+class ConfigDocument(BaseModel):
+    """TOML 配置真源对应的领域模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     server: ServerConfig = Field(default_factory=ServerConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
+    providers: dict[str, ProviderDef] = Field(default_factory=dict)
+    models: dict[str, VirtualModelDef] = Field(default_factory=dict)
+
+
+class AppConfig(BaseModel):
+    """完成实际模型解析后供运行时组件消费的配置。"""
+
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    router: RouterConfig = Field(default_factory=RouterConfig)
+    providers: dict[str, ProviderDef] = Field(default_factory=dict)
     models: dict[str, VirtualModelConfig]
 
 
-def _expand_env_vars(raw: dict) -> dict:
-    """递归展开字典中所有字符串值的 ${ENV_VAR} 引用."""
+def _expand_env_vars(raw: Any) -> Any:
+    """递归展开配置中所有字符串值的 ${ENV_VAR} 引用。"""
+    if isinstance(raw, str):
+        return os.path.expandvars(raw)
+    if isinstance(raw, dict):
+        return {key: _expand_env_vars(value) for key, value in raw.items()}
+    if isinstance(raw, list):
+        return [_expand_env_vars(item) for item in raw]
+    return raw
 
-    def expand(value):
-        if isinstance(value, str):
-            return os.path.expandvars(value)
-        if isinstance(value, dict):
-            return {k: expand(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [expand(item) for item in value]
-        return value
 
-    return expand(raw)
+def _reject_legacy_model_format(raw: dict[str, Any]) -> None:
+    models = raw.get("models", {})
+    if not isinstance(models, dict):
+        return
+    for virtual_name, entry in models.items():
+        if isinstance(entry, list) or (
+            isinstance(entry, dict)
+            and (
+                isinstance(entry.get("pinned_model"), str)
+                or any(
+                    field in entry
+                    for field in ("providers", "pinned_provider", "priority")
+                )
+            )
+        ):
+            raise ConfigError(
+                f"模型 '{virtual_name}' 使用旧版配置格式；"
+                "请改用 models = [{{ provider = ..., model = ... }}] "
+                "和结构化 pinned_model，旧格式不再兼容"
+            )
+
+
+def parse_config_document(raw: dict[str, Any]) -> ConfigDocument:
+    """将已读取的 TOML 字典校验为当前版本配置文档。
+
+    Args:
+        raw: 未展开环境变量的 TOML 字典。
+
+    Returns:
+        校验完成且环境变量已展开的配置文档。
+
+    Raises:
+        ConfigError: 配置使用旧格式、包含未知字段或字段值无效。
+    """
+    _reject_legacy_model_format(raw)
+    try:
+        return ConfigDocument.model_validate(_expand_env_vars(raw))
+    except ValidationError as exc:
+        raise ConfigError(f"配置校验失败: {exc}") from exc
 
 
 def _provider_config_from_def(
-    pdef: ProviderDef,
+    provider: ProviderDef,
+    actual_model: ActualModelDef,
     *,
     name: str,
     model: str,
     priority: int,
-    input_price_per_million: float | None = None,
-    output_price_per_million: float | None = None,
-    cache_read_price_per_million: float | None = None,
-    cache_write_price_per_million: float | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
-        type=pdef.type,
+        type=provider.type,
         name=name,
         model=model,
-        api_key=pdef.api_key,
-        base_url=pdef.base_url,
+        api_key=provider.api_key,
+        base_url=provider.base_url,
         priority=priority,
-        timeout_seconds=pdef.timeout_seconds,
-        failure_threshold=pdef.failure_threshold,
-        recovery_timeout=pdef.recovery_timeout,
-        max_concurrent=pdef.max_concurrent,
-        max_queue=pdef.max_queue,
-        queue_wait_timeout=pdef.queue_wait_timeout,
-        rate_limit_cooldown=pdef.rate_limit_cooldown,
-        input_price_per_million=input_price_per_million,
-        output_price_per_million=output_price_per_million,
-        cache_read_price_per_million=cache_read_price_per_million,
-        cache_write_price_per_million=cache_write_price_per_million,
+        timeout_seconds=provider.timeout_seconds,
+        failure_threshold=provider.failure_threshold,
+        recovery_timeout=provider.recovery_timeout,
+        max_concurrent=provider.max_concurrent,
+        max_queue=provider.max_queue,
+        queue_wait_timeout=provider.queue_wait_timeout,
+        rate_limit_cooldown=provider.rate_limit_cooldown,
+        **actual_model.model_dump(),
     )
 
 
-def _resolve_provider_refs(
-    virtual_name: str,
-    refs: list[dict],
-    providers: dict[str, ProviderDef],
-) -> list[ProviderConfig]:
-    """将模型引用列表合并为 ProviderConfig 列表."""
-    if not isinstance(refs, list) or not refs:
-        print(f"错误: 模型 '{virtual_name}' 的 provider 列表为空", file=sys.stderr)
-        sys.exit(1)
+def build_runtime_config(
+    document: ConfigDocument, *, allow_unresolved_api_keys: bool = False
+) -> AppConfig:
+    """解析实际模型引用并构建 Router 可直接消费的配置。
 
-    resolved: list[ProviderConfig] = []
-    for i, ref in enumerate(refs):
-        provider_name = ref.get("provider", "")
-        if not provider_name:
-            print(
-                f"错误: 模型 '{virtual_name}' 第 {i + 1} 条缺少 provider 字段",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if provider_name not in providers:
-            print(
-                f"警告: 模型 '{virtual_name}' 引用了未知 provider '{provider_name}'，已自动跳过",
-                file=sys.stderr,
-            )
-            continue
+    Args:
+        document: 已通过字段校验的配置文档。
+        allow_unresolved_api_keys: 是否允许运行时保留未展开的 API key 占位符。
 
-        pdef = providers[provider_name]
-        try:
-            resolved.append(
+    Returns:
+        包含完整 ProviderConfig 链的运行时配置。
+
+    Raises:
+        ConfigError: 引用悬空、sticky pin 无效或 API key 未解析。
+    """
+    if not allow_unresolved_api_keys:
+        unresolved = [
+            name
+            for name, provider in document.providers.items()
+            if has_unresolved_env_var(provider.api_key)
+        ]
+        if unresolved:
+            names = ", ".join(sorted(unresolved))
+            raise ConfigError(f"Provider API key 环境变量未设置或未正确插值: {names}")
+
+    actual_model_index = {
+        (provider_name, model_name): (provider, actual_model)
+        for provider_name, provider in document.providers.items()
+        for model_name, actual_model in provider.models.items()
+    }
+    resolved_models: dict[str, VirtualModelConfig] = {}
+    for virtual_name, virtual_model in document.models.items():
+        providers: list[ProviderConfig] = []
+        for index, ref in enumerate(virtual_model.models):
+            provider = document.providers.get(ref.provider)
+            if provider is None:
+                raise ConfigError(
+                    f"模型 '{virtual_name}' 引用了未知 Provider '{ref.provider}'"
+                )
+            indexed_model = actual_model_index.get((ref.provider, ref.model))
+            if indexed_model is None:
+                raise ConfigError(
+                    f"模型 '{virtual_name}' 引用了未在 Provider '{ref.provider}' "
+                    f"下定义的实际模型 '{ref.model}'"
+                )
+            provider, actual_model = indexed_model
+            providers.append(
                 _provider_config_from_def(
-                    pdef,
-                    name=provider_name,
-                    model=ref["model"],
-                    priority=ref["priority"],
-                    input_price_per_million=ref.get("input_price_per_million"),
-                    output_price_per_million=ref.get("output_price_per_million"),
-                    cache_read_price_per_million=ref.get(
-                        "cache_read_price_per_million"
-                    ),
-                    cache_write_price_per_million=ref.get(
-                        "cache_write_price_per_million"
-                    ),
+                    provider,
+                    actual_model,
+                    name=ref.provider,
+                    model=ref.model,
+                    priority=index + 1,
                 )
             )
-        except KeyError as e:
-            print(
-                f"错误: 模型 '{virtual_name}' 第 {i + 1} 条缺少 {e} 字段",
-                file=sys.stderr,
-            )
-            sys.exit(1)
 
-    if not resolved:
-        return []
-    resolved.sort(key=lambda p: p.priority)
-    return resolved
+        pin = virtual_model.pinned_model
+        if document.router.mode == "sticky":
+            if pin is None:
+                raise ConfigError(
+                    f"全局 sticky 模式下模型 '{virtual_name}' 必须设置 pinned_model"
+                )
+            if pin not in virtual_model.models:
+                raise ConfigError(
+                    f"模型 '{virtual_name}' 的 pinned_model "
+                    f"'{pin.provider}/{pin.model}' 不在该虚拟模型的模型链中"
+                )
+
+        resolved_models[virtual_name] = VirtualModelConfig(
+            pinned_model=pin,
+            providers=providers,
+        )
+
+    return AppConfig(
+        server=document.server,
+        router=document.router,
+        providers=document.providers,
+        models=resolved_models,
+    )
+
+
+def parse_config_data(
+    raw: dict[str, Any], *, allow_unresolved_api_keys: bool = False
+) -> AppConfig:
+    """校验原始配置字典并构建运行时配置。"""
+    document = parse_config_document(raw)
+    return build_runtime_config(
+        document, allow_unresolved_api_keys=allow_unresolved_api_keys
+    )
 
 
 def load_config(
     config_path: str | Path, *, allow_unresolved_api_keys: bool = False
 ) -> AppConfig:
+    """从 TOML 文件加载并解析运行时配置。
+
+    Raises:
+        ConfigError: 文件不存在、TOML 无法解析或配置语义无效。
+    """
     path = Path(config_path)
     if not path.exists():
-        print(f"错误: 配置文件不存在: {path}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
-
-    raw = _expand_env_vars(raw)
-
-    server_raw = raw.get("server", {})
-    router_raw = raw.get("router", {})
-    providers_raw: dict[str, dict] = raw.get("providers", {})
-    models_raw: dict = raw.get("models", {})
-
-    if not providers_raw:
-        print(
-            "提示: 配置文件中未定义任何 provider，可通过 dashboard 添加",
-            file=sys.stderr,
-        )
-
-    if not models_raw:
-        print("提示: 配置文件中未定义任何模型，可通过 dashboard 添加", file=sys.stderr)
-
-    # 解析 provider 基础定义
-    providers: dict[str, ProviderDef] = {}
-    for name, pdata in providers_raw.items():
-        try:
-            provider = ProviderDef(**pdata)
-            if not allow_unresolved_api_keys and has_unresolved_env_var(
-                provider.api_key
-            ):
-                raise ValueError(f"环境变量未设置或未正确插值: {provider.api_key}")
-            providers[name] = provider
-        except Exception as e:
-            print(f"错误: 解析 provider '{name}' 配置失败: {e}", file=sys.stderr)
-            sys.exit(1)
+        raise ConfigError(f"配置文件不存在: {path}")
 
     try:
-        router_cfg = RouterConfig(**router_raw)
-    except Exception as e:
-        print(f"错误: 解析 [router] 配置失败: {e}", file=sys.stderr)
-        sys.exit(1)
+        with path.open("rb") as file:
+            raw = tomllib.load(file)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"读取配置文件失败: {path}: {exc}") from exc
 
-    # 解析模型：兼容旧 list 格式与新 dict 格式
-    models: dict[str, VirtualModelConfig] = {}
-    for virtual_name, entry in models_raw.items():
-        pinned_provider: str | None = None
-        pinned_model: str | None = None
-        refs: list[dict]
-
-        if isinstance(entry, list):
-            refs = entry
-        elif isinstance(entry, dict):
-            # 兼容旧版 per-model mode 字段（已迁移到 [router].mode，此处忽略）
-            pinned_provider = entry.get("pinned_provider")
-            pinned_model = entry.get("pinned_model")
-            refs = entry.get("providers", [])
-            if not isinstance(refs, list):
-                print(
-                    f"错误: 模型 '{virtual_name}' 的 providers 必须是数组",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        else:
-            print(
-                f"错误: 模型 '{virtual_name}' 配置格式无效",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        resolved = _resolve_provider_refs(virtual_name, refs, providers)
-        if not resolved:
-            print(
-                f"警告: 模型 '{virtual_name}' 没有有效的 provider，已跳过",
-                file=sys.stderr,
-            )
-            continue
-
-        try:
-            models[virtual_name] = VirtualModelConfig(
-                pinned_provider=pinned_provider,
-                pinned_model=pinned_model,
-                providers=resolved,
-            )
-        except Exception as e:
-            print(f"错误: 解析模型 '{virtual_name}' 失败: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    if router_cfg.mode == "sticky":
-        for vname, vm in models.items():
-            if not vm.pinned_provider or not vm.pinned_model:
-                print(
-                    f"错误: 全局 sticky 模式下模型 '{vname}' 必须设置 "
-                    "pinned_provider 与 pinned_model",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            matched = any(
-                p.name == vm.pinned_provider and p.model == vm.pinned_model
-                for p in vm.providers
-            )
-            if not matched:
-                print(
-                    f"错误: 模型 '{vname}' 的 pinned provider "
-                    f"'{vm.pinned_provider}:{vm.pinned_model}' "
-                    "不在该虚拟模型的 provider 链中",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-
-    return AppConfig(
-        server=ServerConfig(**server_raw),
-        router=router_cfg,
-        models=models,
-    )
+    return parse_config_data(raw, allow_unresolved_api_keys=allow_unresolved_api_keys)

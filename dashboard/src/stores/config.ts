@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import * as api from "@/api";
 import type {
   AppConfig,
+  ConfigReferenceError,
   RouterMode,
   VirtualModelConfig,
 } from "@/api/types";
@@ -19,6 +20,23 @@ import {
 
 function cloneConfig(c: AppConfig): AppConfig {
   return structuredClone(c);
+}
+
+function referenceConflict(error: unknown): ConfigReferenceError | null {
+  if (!(error instanceof api.ApiError)) return null;
+  const detail = error.detail;
+  if (!detail || typeof detail !== "object" || !("error" in detail)) return null;
+  const conflict = (detail as { error?: unknown }).error;
+  if (!conflict || typeof conflict !== "object") return null;
+  const candidate = conflict as Partial<ConfigReferenceError>;
+  if (
+    (candidate.code !== "provider_in_use" && candidate.code !== "model_in_use") ||
+    typeof candidate.provider !== "string" ||
+    !Array.isArray(candidate.referenced_by)
+  ) {
+    return null;
+  }
+  return candidate as ConfigReferenceError;
 }
 
 export const useConfigStore = defineStore("config", () => {
@@ -48,6 +66,20 @@ export const useConfigStore = defineStore("config", () => {
       };
     }
     return buildPutPayload(draft.value, models.value, maskedApiKeys.value);
+  }
+
+  function ensureStickyPins() {
+    if (draft.value?.router.mode !== "sticky") return;
+    for (const virtualModel of Object.values(models.value)) {
+      const pinValid = virtualModel.models.some(
+        (model) =>
+          model.provider === virtualModel.pinned_model?.provider &&
+          model.model === virtualModel.pinned_model?.model,
+      );
+      if (pinValid) continue;
+      const first = virtualModel.models[0];
+      virtualModel.pinned_model = first ? { ...first } : null;
+    }
   }
 
   /** Reuse the active request so callers always initialize one consistent draft. */
@@ -94,6 +126,7 @@ export const useConfigStore = defineStore("config", () => {
       fieldErrors.value = { _: "配置未加载" };
       return false;
     }
+    ensureStickyPins();
     const s = draft.value.server;
     if (!s.host.trim()) errs["server.host"] = "host 不能为空";
     if (!Number.isFinite(s.port) || s.port < 1 || s.port > 65535) {
@@ -178,36 +211,46 @@ export const useConfigStore = defineStore("config", () => {
         errs[`providers.${name}.api_key`] =
           "不能使用脱敏形态的密钥；请输入完整 api_key 或留空保留";
       }
+      for (const [modelName, actualModel] of Object.entries(p.models)) {
+        if (!modelName.trim()) {
+          errs[`providers.${name}.models`] = "实际模型名不能为空";
+        }
+        const prices = [
+          actualModel.input_price_per_million,
+          actualModel.output_price_per_million,
+          actualModel.cache_read_price_per_million,
+          actualModel.cache_write_price_per_million,
+        ];
+        if (prices.some((price) => price != null && (!Number.isFinite(price) || price < 0))) {
+          errs[`providers.${name}.models.${modelName}`] = "费用需为 ≥ 0 的数字或留空";
+        }
+      }
     }
 
     for (const [name, m] of Object.entries(models.value)) {
-      if (!m.providers.length) {
-        errs[`models.${name}`] = "至少一条 provider 引用";
+      if (!m.models.length) {
+        errs[`models.${name}`] = "至少选择一个实际模型";
       }
-      m.providers.forEach((r, i) => {
+      const seen = new Set<string>();
+      m.models.forEach((r, i) => {
         if (!r.provider?.trim() || !(r.provider in draft.value!.providers)) {
           errs[`models.${name}.ref.${i}`] = "provider 无效或不存在";
         }
-        if (!r.model?.trim()) {
-          errs[`models.${name}.ref.${i}.model`] = "model 不能为空";
+        const provider = draft.value!.providers[r.provider];
+        if (!r.model?.trim() || !provider?.models[r.model]) {
+          errs[`models.${name}.ref.${i}.model`] = "实际模型不存在";
         }
-        const prices = [
-          r.input_price_per_million,
-          r.output_price_per_million,
-          r.cache_read_price_per_million,
-          r.cache_write_price_per_million,
-        ];
-        if (prices.some((price) => price != null && (!Number.isFinite(price) || price < 0))) {
-          errs[`models.${name}.ref.${i}.price`] = "费用需为 ≥ 0 的数字，留空则快照为 NULL";
+        const identity = `${r.provider}\u0000${r.model}`;
+        if (seen.has(identity)) {
+          errs[`models.${name}.ref.${i}`] = "不能重复选择同一实际模型";
         }
+        seen.add(identity);
       });
-      if (draft.value.router.mode === "sticky") {
+      if (draft.value.router.mode === "sticky" && m.models.length > 0) {
         const ok =
-          m.pinned_provider &&
           m.pinned_model &&
-          m.providers.some(
-            (r) =>
-              r.provider === m.pinned_provider && r.model === m.pinned_model,
+          m.models.some(
+            (r) => r.provider === m.pinned_model?.provider && r.model === m.pinned_model?.model,
           );
         if (!ok) {
           errs[`models.${name}.pin`] = "sticky 模式需要有效 pin";
@@ -248,6 +291,17 @@ export const useConfigStore = defineStore("config", () => {
       await api.putConfig(payload);
       await load();
     } catch (err) {
+      const conflict = referenceConflict(err);
+      if (conflict) {
+        const target =
+          conflict.code === "provider_in_use"
+            ? `Provider「${conflict.provider}」`
+            : `实际模型「${conflict.provider}/${conflict.model}」`;
+        const message = `${target}仍被虚拟模型引用：${conflict.referenced_by.join("、")}。请先单独保存引用移除。`;
+        fieldErrors.value = { ...fieldErrors.value, providers: message };
+        error.value = message;
+        throw new Error(message);
+      }
       error.value = err instanceof Error ? err.message : "保存失败";
       throw err;
     } finally {
@@ -323,31 +377,57 @@ export const useConfigStore = defineStore("config", () => {
       queue_wait_timeout: 30,
       rate_limit_cooldown: 30,
       has_key: false,
+      models: {},
     };
   }
 
-  function removeProvider(name: string) {
-    if (!draft.value) return;
+  function referencedBy(provider: string, model?: string): string[] {
+    return Object.entries(models.value)
+      .filter(([, virtualModel]) => {
+        const referencedInModels = virtualModel.models.some(
+          (ref) => ref.provider === provider && (model == null || ref.model === model),
+        );
+        const pinnedModel = virtualModel.pinned_model;
+        const referencedByPin =
+          pinnedModel?.provider === provider && (model == null || pinnedModel.model === model);
+        return referencedInModels || referencedByPin;
+      })
+      .map(([name]) => name);
+  }
+
+  function removeProvider(name: string): string[] {
+    if (!draft.value) return [];
+    const references = referencedBy(name);
+    if (references.length) return references;
     delete draft.value.providers[name];
     knownProviders.value.delete(name);
     const { [name]: _removed, ...rest } = maskedApiKeys.value;
     void _removed;
     maskedApiKeys.value = rest;
-    for (const m of Object.values(models.value)) {
-      m.providers = m.providers.filter((r) => r.provider !== name);
-      if (m.pinned_provider === name) {
-        m.pinned_provider = null;
-        m.pinned_model = null;
-      }
-    }
+    return [];
+  }
+
+  function removeActualModel(provider: string, model: string): string[] {
+    if (!draft.value?.providers[provider]) return [];
+    const references = referencedBy(provider, model);
+    if (references.length) return references;
+    delete draft.value.providers[provider].models[model];
+    return [];
+  }
+
+  function addActualModel(provider: string, model: string): boolean {
+    const providerConfig = draft.value?.providers[provider];
+    const name = model.trim();
+    if (!providerConfig || !name || providerConfig.models[name]) return false;
+    providerConfig.models[name] = {};
+    return true;
   }
 
   function addModel(name: string) {
     if (!name.trim() || models.value[name]) return;
     models.value[name] = {
-      pinned_provider: null,
       pinned_model: null,
-      providers: [],
+      models: [],
     };
   }
 
@@ -364,11 +444,11 @@ export const useConfigStore = defineStore("config", () => {
   function moveRef(model: string, from: number, to: number) {
     const m = models.value[model];
     if (!m) return;
-    const list = [...m.providers];
+    const list = [...m.models];
     if (from < 0 || from >= list.length || to < 0 || to >= list.length) return;
     const [item] = list.splice(from, 1);
     list.splice(to, 0, item);
-    m.providers = list;
+    m.models = list;
   }
 
   return {
@@ -384,8 +464,11 @@ export const useConfigStore = defineStore("config", () => {
     setRouterMode,
     validate,
     buildPayload,
+    ensureStickyPins,
     addProvider,
     removeProvider,
+    addActualModel,
+    removeActualModel,
     addModel,
     removeModel,
     renameModel,

@@ -85,48 +85,50 @@ host = "127.0.0.1"
 port = 8080
 
 # ==========================================
-# Provider 定义 — 每个 provider 只配一次
+# Provider 连接设置与实际模型目录
 # ==========================================
 [providers.anthropic]
 type = "anthropic"
 api_key = "${ANTHROPIC_API_KEY}"
 base_url = "https://api.anthropic.com"
 
-[providers.zhipu]
-type = "anthropic"
-api_key = "${ZHIPU_API_KEY}"
-base_url = "https://api.z.ai/api/anthropic"
-
-# ==========================================
-# 虚拟模型 — 引用 provider + 模型名 + 优先级
-# ==========================================
-
-[[models.haiku-router]]
-provider = "anthropic"                    # 引用 [providers] 中的名字
-model = "claude-haiku-4-5-20251001"       # 真实模型名
-priority = 1                              # 优先级 (越小越优先)
+[providers.anthropic.models."claude-haiku-4-5-20251001"]
 input_price_per_million = 1.0             # 可选，USD / 1M Token
 output_price_per_million = 4.0
 cache_read_price_per_million = 0.1
 cache_write_price_per_million = 1.25
 
-[[models.haiku-router]]
-provider = "zhipu"
-model = "glm-5.1"
-priority = 2
+[providers.anthropic.models."claude-sonnet-4-5-20250929"]
 
-[[models.sonnet-router]]
-provider = "anthropic"
-model = "claude-sonnet-4-5-20250929"
-priority = 1
+[providers.zhipu]
+type = "anthropic"
+api_key = "${ZHIPU_API_KEY}"
+base_url = "https://api.z.ai/api/anthropic"
 
-[[models.sonnet-router]]
-provider = "zhipu"
-model = "glm-5.1"
-priority = 2
+[providers.zhipu.models."glm-5.1"]
+
+# ==========================================
+# 虚拟模型 — 只保存有序引用与结构化 pin
+# ==========================================
+
+[models.haiku-router]
+pinned_model = { provider = "anthropic", model = "claude-haiku-4-5-20251001" }
+models = [
+  { provider = "anthropic", model = "claude-haiku-4-5-20251001" },
+  { provider = "zhipu", model = "glm-5.1" },
+]
+
+[models.sonnet-router]
+pinned_model = { provider = "anthropic", model = "claude-sonnet-4-5-20250929" }
+models = [
+  { provider = "anthropic", model = "claude-sonnet-4-5-20250929" },
+  { provider = "zhipu", model = "glm-5.1" },
+]
 ```
 
-配置在启动时加载，也可通过 Dashboard 保存并热重载。模型费用均可省略：省略值在运行时保持 `None`，写入调用快照时为 SQLite `NULL`，只在计算费用时按 0；显式配置 0 则保留为数值 0。
+实际模型身份始终是结构化的 `(provider, model)`；`<provider>/<model>` 只用于展示，不用于反向解析。实际模型及四类价格只在 Provider 目录定义一次，虚拟模型数组顺序在运行时生成 `priority = index + 1`。模型费用均可省略：省略值在运行时保持 `None`，写入调用快照时为 SQLite `NULL`，只在计算费用时按 0；显式配置 0 则保留为数值 0。
+
+这是不兼容旧格式的 breaking change。旧版 `[[models.<name>.providers]]`、引用上的 `priority`/价格、字符串 `pinned_model` 与独立 `pinned_provider` 会返回明确错误；系统不自动读取、迁移或改写旧文件。
 
 ---
 
@@ -138,24 +140,41 @@ priority = 2
 - 使用 `tomllib` 加载 TOML 配置文件
 - `os.path.expandvars()` 对 `api_key` 等字段做 `${ENV_VAR}` 插值
 - Pydantic 校验结构完整性
+- 校验 Provider/实际模型引用、重复引用、非负价格和 sticky pin
 - 运行时启动允许未解析 `${ENV_VAR}`，用于新环境先打开 dashboard 配置
 - 严格校验命令会在环境变量未设置时失败，并打印具体 provider
+- 使用结构化 `ConfigError`，可复用解析层不调用 `sys.exit()`
 
 **Pydantic 模型：**
 
 ```python
-class ProviderConfig(BaseModel):
-    type: Literal["anthropic", "openai"]
-    name: str             # Provider 配置名
-    model: str
-    api_key: str            # 插值后的实际 key
-    base_url: str
-    priority: int
-    timeout_seconds: float = 120.0
+class ActualModelDef(BaseModel):
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
     cache_read_price_per_million: float | None = None
     cache_write_price_per_million: float | None = None
+
+class ProviderDef(BaseModel):
+    type: Literal["anthropic", "openai"]
+    api_key: str
+    base_url: str
+    timeout_seconds: float = 120.0
+    models: dict[str, ActualModelDef]
+
+class ModelRef(BaseModel):
+    provider: str
+    model: str
+
+class VirtualModelDef(BaseModel):
+    pinned_model: ModelRef | None
+    models: list[ModelRef]
+
+class ProviderConfig(BaseModel):
+    # ProviderDef + ActualModelDef + ModelRef + 数组下标的运行时解析结果
+    name: str
+    model: str
+    priority: int
+    ...
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
@@ -163,12 +182,21 @@ class ServerConfig(BaseModel):
 
 class AppConfig(BaseModel):
     server: ServerConfig
-    models: dict[str, list[ProviderConfig]]   # 虚拟模型名 → 排序后的 provider 列表
+    providers: dict[str, ProviderDef]
+    models: dict[str, VirtualModelConfig]
 ```
 
 **TOML 解析要点：**
 
-`[[models.haiku-router]]` 这种 TOML 数组语法解析后天然就是 `{"models": {"haiku-router": [{...}, {...}]}}`，Pydantic 映射很自然。加载后按 `priority` 排序。
+解析分为两层：`ConfigDocument` 忠实表达配置文件中的 Provider 目录和 `ModelRef`；`build_runtime_config()` 通过 `(provider, model)` 索引合并 Provider 连接设置、`ActualModelDef` 价格和数组下标，生成 Router 直接消费的完整 `ProviderConfig`。路由层不反查原始配置。
+
+### 1.1 api/config.py — 配置一致性与引用完整性
+
+- `GET /api/config` 返回规范结构并脱敏 API key；Provider 与模型子端点分别返回实际模型目录和有序 `ModelRef`。
+- `PUT /api/config` 在接触现有文件前完成候选字段校验、TOML 序列化回读和运行时配置构建。
+- 候选准备完成后，通过同目录临时文件原子替换 `config.toml`，再切换 Router 与日志配置。
+- 写盘、Router 切换或日志重配置失败时恢复旧文件和旧运行时，并清理临时文件。
+- 删除保护比较现有配置与候选配置。仍被引用的 Provider/实际模型返回 `409 {"error": {"code": "provider_in_use" | "model_in_use", "provider": ..., "referenced_by": [...]}}`；模型冲突额外返回 `model`，Provider 冲突省略该字段。用户必须先单独保存引用移除，再执行删除。
 
 ### 2. routing.py — 路由引擎
 
@@ -492,6 +520,8 @@ dashboard 作为独立 Vue 目录构建，由独立面板服务代理 router 的
 
 真实模型图表、统计表、Calls 筛选项和调用详情统一通过 `formatActualModel(provider, model)` 生成 `<provider>/<model>`。Provider 与模型在 API、store 和筛选查询中始终是独立字段，展示字符串不参与身份解析。调用详情额外展示四类价格快照，以区分未配置 (`NULL`) 与显式 0。
 
+配置页的数据层与后端领域模型一致：Provider draft 持有 `models: Record<string, ActualModelConfig>`，虚拟模型 draft 只持有有序 `models: ModelRef[]` 和 `pinned_model: ModelRef | null`。虚拟模型页通过按 Provider 分组的组合选择器引用已有实际模型，禁止自由输入、重复引用和引用不存在的目录项；拖拽只改变数组顺序。Provider 或实际模型仍被引用时，前端消费后端固定的 `provider_in_use` / `model_in_use` 错误和 `referenced_by` 列表，保留当前数据并提示先移除引用。
+
 ---
 
 ## Claude Code 配置方式
@@ -522,7 +552,7 @@ dashboard 作为独立 Vue 目录构建，由独立面板服务代理 router 的
 | 路由状态 | 有状态 (熔断器) | 每请求独立遍历 provider 链，但通过熔断器跳过持续故障的 provider |
 | 流式故障转移 | 无缓冲直传 | SSE 字节边收边发，优先保证延迟；流中断由 Claude Code 自动重试触发下一 provider |
 | HTTP 客户端 | 单实例复用 | 进程级 httpx.AsyncClient，按 base_url 自动连接池隔离 |
-| 配置热更新 | 不支持 | 重启进程更新配置，简单可靠 |
+| 配置热更新 | 原子写盘 + 运行时回滚 | 候选配置先完整验证；文件、Router、日志任一步失败都恢复旧状态 |
 | Provider 接口 | 统一 Anthropic 格式 | routing.py 不感知后端协议，OpenAI 适配器内部转换 |
 | 熔断策略 | Per-provider 三态 | 401/403 立即熔断，429/529/5xx 连续失败后熔断，60s 后半开探测 |
 

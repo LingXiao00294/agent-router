@@ -22,26 +22,7 @@ timeout_seconds = 120
 # queue_wait_timeout = 30
 # rate_limit_cooldown = 30
 
-[providers.deepseek]
-type = "anthropic"
-api_key = "${DEEPSEEK_API_KEY}"
-base_url = "https://api.deepseek.com/anthropic"
-timeout_seconds = 120
-
-[providers."mimo token plan"]
-type = "anthropic"
-api_key = "${MIMO_API_KEY}"
-base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
-timeout_seconds = 120
-
-[models.opus-router]
-pinned_provider = "mimo token plan"
-pinned_model = "mimo-v2.5-pro"
-
-[[models.opus-router.providers]]
-provider = "mimo token plan"
-model = "mimo-v2.5-pro"
-priority = 1
+[providers.zai.models."glm-5.2"]
 # 可选，单位 USD / 1M Token；省略时快照为 NULL，显式 0 时快照保留 0
 # 两种情况在费用计算时都按 0，但历史记录可区分
 # input_price_per_million = 0
@@ -49,40 +30,44 @@ priority = 1
 # cache_read_price_per_million = 0
 # cache_write_price_per_million = 0
 
-[[models.opus-router.providers]]
-provider = "deepseek"
-model = "deepseek-v4-pro"
-priority = 2
+[providers.deepseek]
+type = "anthropic"
+api_key = "${DEEPSEEK_API_KEY}"
+base_url = "https://api.deepseek.com/anthropic"
+timeout_seconds = 120
 
-[[models.opus-router.providers]]
-provider = "zai"
-model = "glm-5.2"
-priority = 3
+[providers.deepseek.models."deepseek-v4-pro"]
+
+[providers.deepseek.models."deepseek-v4-flash"]
+
+[providers."mimo token plan"]
+type = "anthropic"
+api_key = "${MIMO_API_KEY}"
+base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
+timeout_seconds = 120
+
+[providers."mimo token plan".models."mimo-v2.5-pro"]
+
+[providers."mimo token plan".models."mimo-v2.5"]
+
+[models.opus-router]
+pinned_model = { provider = "mimo token plan", model = "mimo-v2.5-pro" }
+models = [
+  { provider = "mimo token plan", model = "mimo-v2.5-pro" },
+  { provider = "deepseek", model = "deepseek-v4-pro" },
+  { provider = "zai", model = "glm-5.2" },
+]
 
 [models.sonnet-router]
-pinned_provider = "deepseek"
-pinned_model = "deepseek-v4-flash"
-
-[[models.sonnet-router.providers]]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-priority = 1
-
-[[models.sonnet-router.providers]]
-provider = "mimo token plan"
-model = "mimo-v2.5"
-priority = 2
+pinned_model = { provider = "deepseek", model = "deepseek-v4-flash" }
+models = [
+  { provider = "deepseek", model = "deepseek-v4-flash" },
+  { provider = "mimo token plan", model = "mimo-v2.5" },
+]
 
 [models.haiku-router]
-pinned_provider = "deepseek"
-pinned_model = "deepseek-v4-flash"
-
-[[models.haiku-router.providers]]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-priority = 1
-
-[[models.haiku-router.providers]]
-provider = "mimo token plan"
-model = "mimo-v2.5"
-priority = 2
+pinned_model = { provider = "deepseek", model = "deepseek-v4-flash" }
+models = [
+  { provider = "deepseek", model = "deepseek-v4-flash" },
+  { provider = "mimo token plan", model = "mimo-v2.5" },
+]

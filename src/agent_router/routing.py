@@ -119,11 +119,15 @@ class Router:
         self.provider_gate.configure_from_models(config.models)
 
     async def reload_config(self, new_config: AppConfig) -> None:
-        """热重载配置，保留 http_client、熔断器与冷却状态."""
-        self.config = new_config
-        self.circuit_breaker.failure_threshold = new_config.router.failure_threshold
-        self.circuit_breaker.recovery_timeout = new_config.router.recovery_timeout
-        self.provider_gate.configure_from_models(new_config.models)
+        """热重载已校验配置，同时保留连接、熔断与冷却状态。"""
+        self._apply_config(new_config)
+
+    def _apply_config(self, config: AppConfig) -> None:
+        """Apply runtime settings after the provider gate accepts the config."""
+        self.provider_gate.configure_from_models(config.models)
+        self.circuit_breaker.failure_threshold = config.router.failure_threshold
+        self.circuit_breaker.recovery_timeout = config.router.recovery_timeout
+        self.config = config
 
     def _virtual_model(self, name: str) -> VirtualModelConfig:
         if name not in self.config.models:
@@ -569,14 +573,14 @@ class Router:
         mode = self.config.router.mode
 
         if mode == "sticky":
-            if not vm.pinned_provider or not vm.pinned_model:
+            if vm.pinned_model is None:
                 raise AllProvidersFailedError(
                     virtual_model,
                     [
                         {
                             "provider": "(none)",
                             "model": "(none)",
-                            "error": ("sticky 模式未配置 pinned_provider/pinned_model"),
+                            "error": "sticky 模式未配置 pinned_model",
                             "retryable": False,
                         }
                     ],
@@ -584,15 +588,16 @@ class Router:
             candidates = [
                 p
                 for p in vm.providers
-                if p.name == vm.pinned_provider and p.model == vm.pinned_model
+                if p.name == vm.pinned_model.provider
+                and p.model == vm.pinned_model.model
             ]
             if not candidates:
                 raise AllProvidersFailedError(
                     virtual_model,
                     [
                         {
-                            "provider": vm.pinned_provider,
-                            "model": vm.pinned_model,
+                            "provider": vm.pinned_model.provider,
+                            "model": vm.pinned_model.model,
                             "error": (
                                 "sticky 指定的 provider:model 不在该虚拟模型链中"
                             ),

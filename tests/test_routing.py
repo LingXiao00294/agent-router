@@ -6,6 +6,7 @@ import httpx
 import pytest
 from agent_router.config import (
     AppConfig,
+    ModelRef,
     ProviderConfig,
     RouterConfig,
     ServerConfig,
@@ -76,6 +77,7 @@ class TestRouterModelLookup:
     async def test_all_unresolved_api_keys_fail_with_clear_error(self, http_client):
         config = AppConfig(
             server=ServerConfig(),
+            router=RouterConfig(mode="failover"),
             models={
                 "m": VirtualModelConfig(
                     providers=[
@@ -263,8 +265,7 @@ class TestRateLimitRouting:
                 router=RouterConfig(mode="sticky"),
                 models={
                     "m": VirtualModelConfig(
-                        pinned_provider="p1",
-                        pinned_model="m1",
+                        pinned_model=ModelRef(provider="p1", model="m1"),
                         providers=[
                             ProviderConfig(
                                 type="anthropic",
@@ -307,8 +308,7 @@ class TestRateLimitRouting:
                 router=RouterConfig(mode="sticky"),
                 models={
                     "m": VirtualModelConfig(
-                        pinned_provider="p1",
-                        pinned_model="m1",
+                        pinned_model=ModelRef(provider="p1", model="m1"),
                         providers=[
                             ProviderConfig(
                                 type="anthropic",
@@ -350,12 +350,11 @@ class TestRateLimitRouting:
             },
         )
         # 绕过 load_config 校验，模拟运行时 pin 丢失
-        config.models["m"].pinned_provider = None
         config.models["m"].pinned_model = None
         router = Router(config, http_client)
         with pytest.raises(AllProvidersFailedError) as exc:
             await router._get_providers("m")
-        assert "pinned_provider" in str(exc.value)
+        assert "pinned_model" in str(exc.value)
 
     async def test_stream_does_not_failover_after_yield(self, http_client):
         """已向客户端发送字节后，流内错误不再切换 provider."""
@@ -385,6 +384,7 @@ class TestRateLimitRouting:
         async with httpx.AsyncClient(transport=transport) as client:
             config = AppConfig(
                 server=ServerConfig(),
+                router=RouterConfig(mode="failover"),
                 models={
                     "m": VirtualModelConfig(
                         providers=[
