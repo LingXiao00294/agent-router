@@ -1015,3 +1015,58 @@ priority = 1
                 assert ids == {"keep-me"}
         finally:
             path.unlink(missing_ok=True)
+
+
+def test_write_toml_always_emits_utf8_under_non_utf8_locale(monkeypatch, tmp_path):
+    """_write_toml 必须始终写 UTF-8（TOML 规范要求）。
+
+    在中文 Windows 上，文本模式 open() 的默认编码是 cp936/GBK。若 _write_toml
+    未显式指定 encoding="utf-8"，含中文（provider/model 名等）的配置会被写成
+    GBK，紧随其后的 tomllib UTF-8 校验回读即报：
+      写入配置失败: 'utf-8' codec can't decode byte 0xbb ...
+
+    这里用 monkeypatch 强制一个非 UTF-8 的默认编码，使该回归在任意平台
+    （含 Linux CI，其默认即 UTF-8）都能被捕获。
+    """
+    import builtins
+
+    real_open = builtins.open
+
+    def fake_open(file, mode="r", *args, encoding=None, **kwargs):
+        # 仅在未显式指定 encoding 的文本模式下注入 GBK，模拟中文 Windows 默认
+        if encoding is None and "b" not in mode:
+            encoding = "gbk"
+        return real_open(file, mode, *args, encoding=encoding, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+
+    from agent_router.api.config import _write_toml
+
+    config_path = tmp_path / "config.toml"
+    data = {
+        "server": {"host": "127.0.0.1", "port": 9456},
+        "providers": {
+            "智谱": {
+                "type": "anthropic",
+                "api_key": "sk-test",
+                "base_url": "https://api.z.ai/api/anthropic",
+            },
+        },
+        "models": {
+            "opus-router": {
+                "pinned_provider": "智谱",
+                "pinned_model": "glm-5.2",
+                "providers": [
+                    {"provider": "智谱", "model": "glm-5.2", "priority": 1},
+                ],
+            },
+        },
+    }
+
+    # 修复前：写入为 GBK → tomllib UTF-8 校验回读抛 UnicodeDecodeError
+    _write_toml(str(config_path), data)
+
+    raw = config_path.read_bytes()
+    text = raw.decode("utf-8")  # TOML 必须是合法 UTF-8
+    assert "智谱" in text
+    assert "[models.opus-router]" in text

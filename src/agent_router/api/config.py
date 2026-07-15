@@ -202,7 +202,9 @@ def _write_toml(config_path: str, data: dict) -> None:
     content = "\n".join(lines) + "\n"
     tmp_path = Path(config_path).with_suffix(".tmp")
     try:
-        with open(tmp_path, "w") as f:
+        # TOML 规范要求 UTF-8；显式指定避免在中文 Windows（默认 cp936/GBK）
+        # 上把非 ASCII 内容写成 GBK，导致下方 tomllib 校验回读失败
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(content)
         # 验证写入的 TOML 可解析
         with open(tmp_path, "rb") as f:
