@@ -4,11 +4,15 @@ import { storeToRefs } from "pinia";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
 import { useOverlayChrome } from "@/composables/useOverlayChrome";
+import { useToast } from "@/composables/useToast";
 import type { ActualModelConfig, ProviderConfig, ProviderType } from "@/api/types";
 import { isBlankOrPlaceholderKey } from "@/utils/configPayload";
+import { formatActualModel } from "@/utils/format";
+import { summarizeProviderModels } from "@/utils/providerPresentation";
 
 const store = useConfigStore();
 const confirm = useConfirm();
+const toast = useToast();
 const { draft, fieldErrors } = storeToRefs(store);
 const newName = ref("");
 const editing = ref<string | null>(null);
@@ -19,10 +23,21 @@ const modelNameDraft = ref("");
 const modelDraft = ref<ActualModelConfig>({});
 const modelError = ref("");
 const modelModalRef = ref<HTMLElement | null>(null);
+const expandedProviders = ref<Set<string>>(new Set());
 
 const providerEntries = computed(() => {
-  if (!draft.value) return [] as { name: string; p: ProviderConfig }[];
-  return Object.entries(draft.value.providers).map(([name, p]) => ({ name, p }));
+  if (!draft.value) {
+    return [] as {
+      name: string;
+      p: ProviderConfig;
+      summary: ReturnType<typeof summarizeProviderModels>;
+    }[];
+  }
+  return Object.entries(draft.value.providers).map(([name, p]) => ({
+    name,
+    p,
+    summary: summarizeProviderModels(p.models),
+  }));
 });
 
 const editingProvider = computed(() => {
@@ -34,6 +49,12 @@ const modalOpen = computed(() => Boolean(editing.value && editingProvider.value)
 useOverlayChrome(modalOpen, modalRef);
 const modelModalOpen = computed(() => editingModelProvider.value !== null);
 useOverlayChrome(modelModalOpen, modelModalRef);
+const modelDisplayName = computed(() => {
+  const provider = editingModelProvider.value;
+  if (!provider) return "";
+  const model = modelNameDraft.value.trim();
+  return model ? formatActualModel(provider, model) : `${provider}/<model>`;
+});
 
 watch(newName, (value) => {
   if (fieldErrors.value.providers !== "名称已存在") return;
@@ -56,6 +77,13 @@ function add() {
 
 function openEdit(name: string) {
   editing.value = name;
+}
+
+function toggleModelSummary(provider: string) {
+  const next = new Set(expandedProviders.value);
+  if (next.has(provider)) next.delete(provider);
+  else next.add(provider);
+  expandedProviders.value = next;
 }
 
 function closeEdit() {
@@ -106,15 +134,21 @@ function saveActualModel() {
     modelError.value = "费用需为 ≥ 0 的数字或留空";
     return;
   }
-  if (editingModelName.value === null && !store.addActualModel(provider, name)) {
-    modelError.value = "同一 Provider 下的实际模型名不能重复";
+  const editingExisting = editingModelName.value !== null;
+  const updated = editingExisting
+    ? store.updateActualModel(provider, name, modelDraft.value)
+    : store.addActualModel(provider, name, modelDraft.value);
+  if (!updated) {
+    modelError.value = editingExisting
+      ? "实际模型已不存在，请关闭弹窗后刷新"
+      : "同一 Provider 下的实际模型名不能重复";
     return;
   }
-  draft.value.providers[provider].models[name] = { ...modelDraft.value };
   const errorKey = `providers.${provider}.models.${name}`;
   const nextErrors = { ...fieldErrors.value };
   delete nextErrors[errorKey];
   fieldErrors.value = nextErrors;
+  toast.success(`${formatActualModel(provider, name)} 已${editingExisting ? "更新" : "添加"}，保存后生效`);
   closeActualModel();
 }
 
@@ -129,8 +163,10 @@ async function removeActualModel(provider: string, model: string) {
   const referencedBy = store.removeActualModel(provider, model);
   if (referencedBy.length) {
     modelError.value = `仍被虚拟模型引用：${referencedBy.join("、")}。请先保存引用移除。`;
+    toast.error(modelError.value);
     return;
   }
+  toast.success(`${formatActualModel(provider, model)} 已删除，保存后生效`);
   closeActualModel();
 }
 
@@ -148,8 +184,10 @@ async function remove(name: string) {
         ...fieldErrors.value,
         providers: `Provider「${name}」仍被虚拟模型引用：${referencedBy.join("、")}。请先保存引用移除。`,
       };
+      toast.error(fieldErrors.value.providers);
       return;
     }
+    toast.success(`Provider「${name}」已删除，保存后生效`);
     if (editing.value === name) editing.value = null;
   }
 }
@@ -206,16 +244,17 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
     <p v-if="fieldErrors.providers" class="err">{{ fieldErrors.providers }}</p>
 
     <div v-if="!providerEntries.length" class="empty-state panel">暂无 Provider，请先添加</div>
-    <div v-else class="panel list">
-      <div
-        v-for="{ name, p } in providerEntries"
+    <div v-else class="provider-grid">
+      <article
+        v-for="{ name, p, summary } in providerEntries"
         :key="name"
-        class="row"
+        class="panel provider-card"
         :class="{ warn: hasFieldError(name) }"
       >
-        <div class="row-main" @click="openEdit(name)">
-          <div class="row-title">
-            <span class="mono name">{{ name }}</span>
+        <header class="card-head">
+          <div class="provider-identity">
+            <h3 class="mono name" :title="name">{{ name }}</h3>
+            <div class="badges">
             <span class="badge badge-muted">{{ p.type }}</span>
             <span
               class="badge"
@@ -223,31 +262,50 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
             >
               {{ keyLabel(p) }}
             </span>
-            <span class="badge badge-muted">{{ Object.keys(p.models).length }} 个模型</span>
+            <span class="badge badge-muted">{{ summary.total }} 个模型</span>
             <span v-if="hasFieldError(name)" class="badge badge-danger">校验</span>
+            </div>
           </div>
-          <div class="row-sub mono muted">{{ shortUrl(p.base_url) }}</div>
-          <div v-if="Object.keys(p.models).length" class="model-summary">
+          <button class="btn btn-sm" type="button" @click="openEdit(name)">设置</button>
+        </header>
+
+        <p class="provider-url mono muted" :title="p.base_url || undefined">
+          {{ shortUrl(p.base_url) }}
+        </p>
+
+        <div class="catalog">
+          <p class="catalog-label">实际模型目录</p>
+          <div v-if="summary.total" class="model-summary">
             <button
-              v-for="model in Object.keys(p.models)"
+              v-for="model in (expandedProviders.has(name) ? Object.keys(p.models) : summary.visible)"
               :key="model"
               class="model-chip mono"
               type="button"
+              :title="`编辑 ${formatActualModel(name, model)}`"
               @click.stop="openActualModel(name, model)"
             >
-              {{ name }}/{{ model }}
+              {{ formatActualModel(name, model) }}
+            </button>
+            <button
+              v-if="summary.remaining"
+              class="more-models"
+              type="button"
+              :aria-expanded="expandedProviders.has(name)"
+              @click="toggleModelSummary(name)"
+            >
+              {{ expandedProviders.has(name) ? "收起" : `还有 ${summary.remaining} 个` }}
             </button>
           </div>
-          <div v-else class="row-sub muted">尚未配置实际模型</div>
+          <div v-else class="catalog-empty">尚未配置实际模型</div>
         </div>
-        <div class="row-actions">
+
+        <footer class="card-actions">
           <button class="btn btn-sm" type="button" @click="openNewActualModel(name)">
             添加模型
           </button>
-          <button class="btn btn-sm" type="button" @click="openEdit(name)">编辑</button>
           <button class="btn btn-sm btn-danger" type="button" @click="remove(name)">删除</button>
-        </div>
-      </div>
+        </footer>
+      </article>
     </div>
 
     <Teleport to="body">
@@ -377,7 +435,9 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
           <header class="modal-head">
             <div>
               <h3>{{ editingModelName ? "编辑实际模型" : "添加实际模型" }}</h3>
-              <p class="mono muted">{{ editingModelProvider }}</p>
+              <p class="mono muted model-display-name" :title="modelDisplayName">
+                {{ modelDisplayName }}
+              </p>
             </div>
             <button class="btn btn-sm" type="button" @click="closeActualModel">关闭</button>
           </header>
@@ -469,58 +529,80 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   flex: 1;
 }
 
-.list {
-  padding: 0;
-  overflow: hidden;
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 0.85rem;
 }
 
-.row {
+.provider-card {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 0.9rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.row:last-child {
-  border-bottom: none;
-}
-
-.row.warn {
-  background: var(--danger-soft);
-}
-
-.row-main {
-  flex: 1;
   min-width: 0;
-  cursor: pointer;
+  min-height: 238px;
+  flex-direction: column;
+  padding: 1rem;
 }
 
-.row-title {
+.provider-card.warn {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger-soft) 45%, var(--bg-elevated));
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.provider-identity {
+  min-width: 0;
+}
+
+.badges {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
+  margin-top: 0.45rem;
 }
 
 .name {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 1rem;
 }
 
-.row-sub {
-  margin-top: 0.2rem;
-  font-size: 0.8rem;
+.provider-url {
+  min-height: 1.15rem;
+  margin: 0.65rem 0 0;
   overflow: hidden;
+  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.catalog {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.catalog-label {
+  margin: 0 0 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .model-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  margin-top: 0.35rem;
 }
 
 .model-chip {
@@ -542,10 +624,38 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   border-color: var(--accent);
 }
 
-.row-actions {
+.more-models,
+.catalog-empty {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.more-models {
+  align-self: center;
+  padding: 0.18rem 0.3rem;
+  border: 0;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.more-models:hover {
+  color: var(--accent);
+}
+
+.catalog-empty {
+  padding: 0.65rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.card-actions {
   display: flex;
+  justify-content: space-between;
   gap: 0.35rem;
-  flex-shrink: 0;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 .err {
@@ -607,6 +717,13 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
   font-size: 0.8rem;
 }
 
+.model-display-name {
+  max-width: min(70vw, 470px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -632,17 +749,26 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
 }
 
 @media (max-width: 640px) {
-  .row {
-    flex-direction: column;
+  .toolbar {
     align-items: stretch;
+    flex-direction: column;
   }
-  .row-actions {
-    justify-content: flex-end;
+  .toolbar .btn {
+    width: 100%;
+  }
+  .provider-card {
+    min-height: 0;
+  }
+  .card-head {
+    align-items: flex-start;
   }
   .grid,
   .span2 {
     grid-template-columns: 1fr;
     grid-column: auto;
+  }
+  .modal {
+    max-height: calc(100dvh - 1rem);
   }
 }
 </style>

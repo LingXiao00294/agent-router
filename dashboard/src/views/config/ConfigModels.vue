@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import type { ModelRef } from "@/api/types";
 import { useConfigStore } from "@/stores/config";
 import { useConfirm } from "@/composables/useConfirm";
+import { formatActualModel } from "@/utils/format";
 
 const store = useConfigStore();
 const confirm = useConfirm();
@@ -11,15 +12,17 @@ const { draft, models, fieldErrors } = storeToRefs(store);
 const newName = ref("");
 const failoverEnabled = computed(() => draft.value?.router.mode === "failover");
 const actualModelGroups = computed(() =>
-  Object.entries(draft.value?.providers ?? {}).map(([provider, config], providerIndex) => ({
-    provider,
-    options: Object.keys(config.models).map((model, modelIndex) => ({
-      id: `${providerIndex}-${modelIndex}`,
+  Object.entries(draft.value?.providers ?? {})
+    .map(([provider, config], providerIndex) => ({
       provider,
-      model,
-      label: `${provider}/${model}`,
-    })),
-  })),
+      options: Object.keys(config.models).map((model, modelIndex) => ({
+        id: `${providerIndex}-${modelIndex}`,
+        provider,
+        model,
+        label: formatActualModel(provider, model),
+      })),
+    }))
+    .filter((group) => group.options.length > 0),
 );
 const actualModelOptions = computed(() => actualModelGroups.value.flatMap((group) => group.options));
 const dragCandidate = ref<{
@@ -82,6 +85,16 @@ function addRef(model: string) {
       ),
   );
   if (option) m.models.push({ provider: option.provider, model: option.model });
+}
+
+function canAddRef(model: string): boolean {
+  const selected = models.value[model]?.models ?? [];
+  return actualModelOptions.value.some(
+    (candidate) =>
+      !selected.some(
+        (row) => row.provider === candidate.provider && row.model === candidate.model,
+      ),
+  );
 }
 
 function optionId(row: ModelRef): string {
@@ -345,7 +358,10 @@ function isPinned(model: string, idx: number) {
         <button class="btn btn-sm btn-danger" type="button" @click="remove(name)">删除</button>
       </header>
 
-      <div v-if="!m.models.length" class="empty-state">尚未选择实际模型</div>
+      <div v-if="!m.models.length" class="empty-state model-empty">
+        <strong>尚未选择实际模型</strong>
+        <span>请先在 Providers 中建立目录，再把模型加入这条路由链。</span>
+      </div>
       <div
         v-for="(row, idx) in m.models"
         :key="refKey(row)"
@@ -374,8 +390,12 @@ function isPinned(model: string, idx: number) {
           ⠿
         </button>
         <span class="prio mono">#{{ idx + 1 }}</span>
-        <label class="model-picker" title="更换实际模型">
-          <span>选择模型</span>
+        <label
+          class="model-picker"
+          :title="`更换 ${formatActualModel(row.provider, row.model)}`"
+        >
+          <span class="picker-value mono">{{ formatActualModel(row.provider, row.model) }}</span>
+          <span class="picker-arrow" aria-hidden="true">⌄</span>
           <select
             :value="optionId(row)"
             :aria-label="`为 ${name} 选择实际模型`"
@@ -398,7 +418,6 @@ function isPinned(model: string, idx: number) {
             </optgroup>
           </select>
         </label>
-        <span class="actual-model mono">{{ row.provider }}/{{ row.model }}</span>
         <div class="ref-actions">
           <button
             class="btn btn-sm"
@@ -420,9 +439,17 @@ function isPinned(model: string, idx: number) {
       </div>
 
       <div class="card-foot">
-        <button class="btn btn-sm" type="button" @click="addRef(name)">添加实际模型</button>
-        <span v-if="m.pinned_model" class="pin-summary muted">
-          当前指定：{{ m.pinned_model.provider }}/{{ m.pinned_model.model }}
+        <button
+          class="btn btn-sm"
+          type="button"
+          :disabled="!canAddRef(name)"
+          :title="canAddRef(name) ? '添加目录中的实际模型' : '没有更多可添加的实际模型'"
+          @click="addRef(name)"
+        >
+          添加实际模型
+        </button>
+        <span v-if="m.pinned_model" class="pin-summary muted" :title="formatActualModel(m.pinned_model.provider, m.pinned_model.model)">
+          当前指定：{{ formatActualModel(m.pinned_model.provider, m.pinned_model.model) }}
         </span>
       </div>
     </article>
@@ -438,8 +465,9 @@ function isPinned(model: string, idx: number) {
     >
       <button class="drag-handle" type="button" disabled>⠿</button>
       <span class="prio mono">#{{ draggingRef.index + 1 }}</span>
-      <span class="model-picker model-picker-disabled">选择模型</span>
-      <span class="actual-model mono">{{ dragPreviewRow.provider }}/{{ dragPreviewRow.model }}</span>
+      <span class="model-picker model-picker-disabled mono">
+        {{ formatActualModel(dragPreviewRow.provider, dragPreviewRow.model) }}
+      </span>
       <div class="ref-actions">
         <button
           class="btn btn-sm"
@@ -471,11 +499,21 @@ function isPinned(model: string, idx: number) {
   gap: 1rem;
   margin-bottom: 0.85rem;
 }
-.card-head h3 { margin: 0; }
+.card-head h3 {
+  max-width: min(70vw, 760px);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .tiny { margin: 0.25rem 0 0; font-size: 0.8rem; }
+.model-empty {
+  display: grid;
+  gap: 0.25rem;
+}
+.model-empty strong { color: var(--text-secondary); }
+.model-empty span { font-size: 0.78rem; }
 .ref-row {
   display: grid;
-  grid-template-columns: 28px 40px 96px minmax(0, 1fr) auto;
+  grid-template-columns: 28px 40px minmax(150px, 1fr) auto;
   gap: 0.5rem;
   align-items: center;
   position: relative;
@@ -545,17 +583,28 @@ function isPinned(model: string, idx: number) {
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   width: 100%;
   min-width: 0;
   min-height: 34px;
-  padding: 0.3rem 0.65rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.65rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text);
   cursor: pointer;
   font-size: 0.85rem;
+}
+.picker-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-arrow {
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 .model-picker:hover {
   background: var(--bg-hover);
@@ -577,12 +626,6 @@ function isPinned(model: string, idx: number) {
   opacity: 0.5;
   cursor: default;
 }
-.actual-model {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .prio { color: var(--text-muted); font-size: 0.8rem; }
 .ref-actions { display: flex; gap: 0.25rem; }
 .card-foot {
@@ -591,11 +634,45 @@ function isPinned(model: string, idx: number) {
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
-.pin-summary { align-self: center; font-size: 0.78rem; }
+.pin-summary {
+  min-width: 0;
+  align-self: center;
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .err { color: var(--danger); font-size: 0.78rem; margin: 0.25rem 0 0; }
-@media (max-width: 800px) {
+@media (max-width: 680px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .toolbar .btn { width: 100%; }
+  .card { padding: 0.8rem; }
+  .card-head { align-items: flex-start; }
+  .card-head h3 { max-width: 68vw; }
   .ref-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 28px 40px minmax(0, 1fr);
+    gap: 0.4rem;
+  }
+  .drag-handle { grid-column: 1; grid-row: 1; }
+  .prio { grid-column: 2; grid-row: 1; }
+  .ref-actions {
+    grid-column: 3;
+    grid-row: 1;
+    justify-content: flex-end;
+  }
+  .model-picker {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .card-foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pin-summary {
+    max-width: 100%;
   }
 }
 </style>
