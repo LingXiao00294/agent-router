@@ -71,6 +71,20 @@ describe("actual-model catalog mutations", () => {
     expect(store.draft.providers.zai.models).toEqual(before);
   });
 
+  test("updates an existing actual model by its exact key", () => {
+    const store = useConfigStore();
+    store.draft = validConfig();
+    store.draft.providers.zai.models[" glm-5 "] = { input_price_per_million: 1 };
+
+    expect(
+      store.updateActualModel("zai", " glm-5 ", { output_price_per_million: 4 }),
+    ).toBe(true);
+    expect(store.draft.providers.zai.models[" glm-5 "]).toEqual({
+      output_price_per_million: 4,
+    });
+    expect(store.draft.providers.zai.models["glm-5"]).toBeUndefined();
+  });
+
   test("rejects duplicate and dangling virtual-model references during validation", () => {
     const store = useConfigStore();
     store.draft = validConfig();

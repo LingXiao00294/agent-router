@@ -52,8 +52,8 @@ useOverlayChrome(modelModalOpen, modelModalRef);
 const modelDisplayName = computed(() => {
   const provider = editingModelProvider.value;
   if (!provider) return "";
-  const model = modelNameDraft.value.trim();
-  return model ? formatActualModel(provider, model) : `${provider}/<model>`;
+  const model = editingModelName.value ?? (modelNameDraft.value.trim() || "<model>");
+  return formatActualModel(provider, model);
 });
 
 watch(newName, (value) => {
@@ -124,8 +124,8 @@ function setOptionalPrice(field: keyof ActualModelConfig, event: Event) {
 function saveActualModel() {
   const provider = editingModelProvider.value;
   if (!provider || !draft.value?.providers[provider]) return;
-  const name = modelNameDraft.value.trim();
-  if (!name) {
+  const draftName = modelNameDraft.value.trim();
+  if (!draftName) {
     modelError.value = "实际模型名不能为空";
     return;
   }
@@ -135,6 +135,7 @@ function saveActualModel() {
     return;
   }
   const editingExisting = editingModelName.value !== null;
+  const name = editingModelName.value ?? draftName;
   const updated = editingExisting
     ? store.updateActualModel(provider, name, modelDraft.value)
     : store.addActualModel(provider, name, modelDraft.value);
@@ -155,7 +156,7 @@ function saveActualModel() {
 async function removeActualModel(provider: string, model: string) {
   const ok = await confirm.confirm({
     title: "删除实际模型",
-    message: `确定删除「${provider}/${model}」？`,
+    message: `确定删除「${formatActualModel(provider, model)}」？`,
     confirmText: "删除",
     danger: true,
   });
@@ -430,7 +431,7 @@ onUnmounted(() => window.removeEventListener("keydown", onModalKey));
           role="dialog"
           aria-modal="true"
           tabindex="-1"
-          :aria-label="editingModelName ? `编辑 ${editingModelProvider}/${editingModelName}` : `添加 ${editingModelProvider} 实际模型`"
+          :aria-label="editingModelName ? `编辑 ${formatActualModel(editingModelProvider, editingModelName)}` : `添加 ${editingModelProvider} 实际模型`"
         >
           <header class="modal-head">
             <div>

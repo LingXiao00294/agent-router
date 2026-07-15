@@ -25,6 +25,20 @@ const actualModelGroups = computed(() =>
     .filter((group) => group.options.length > 0),
 );
 const actualModelOptions = computed(() => actualModelGroups.value.flatMap((group) => group.options));
+const availableOptions = computed(() =>
+  Object.fromEntries(
+    Object.entries(models.value).map(([name, config]) => [
+      name,
+      actualModelOptions.value.filter(
+        (candidate) =>
+          !config.models.some(
+            (selected) =>
+              selected.provider === candidate.provider && selected.model === candidate.model,
+          ),
+      ),
+    ]),
+  ),
+);
 const dragCandidate = ref<{
   model: string;
   index: number;
@@ -77,24 +91,12 @@ async function remove(name: string) {
 function addRef(model: string) {
   const m = models.value[model];
   if (!m) return;
-  const option = actualModelOptions.value.find(
-    (candidate) =>
-      !m.models.some(
-        (selected) =>
-          selected.provider === candidate.provider && selected.model === candidate.model,
-      ),
-  );
+  const option = availableOptions.value[model]?.[0];
   if (option) m.models.push({ provider: option.provider, model: option.model });
 }
 
 function canAddRef(model: string): boolean {
-  const selected = models.value[model]?.models ?? [];
-  return actualModelOptions.value.some(
-    (candidate) =>
-      !selected.some(
-        (row) => row.provider === candidate.provider && row.model === candidate.model,
-      ),
-  );
+  return Boolean(availableOptions.value[model]?.length);
 }
 
 function optionId(row: ModelRef): string {
