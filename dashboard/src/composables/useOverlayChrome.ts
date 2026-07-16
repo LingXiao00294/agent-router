@@ -1,5 +1,6 @@
 import {
   onScopeDispose,
+  nextTick,
   watch,
   type MaybeRefOrGetter,
   type Ref,
@@ -59,11 +60,13 @@ export function useOverlayChrome(
     }
     bodyLockCount += 1;
     window.addEventListener("keydown", onKeydown);
-    requestAnimationFrame(() => {
-      const el = root.value;
-      if (!el) return;
-      const nodes = focusables(el);
-      (nodes[0] ?? el).focus();
+    void nextTick(() => {
+      requestAnimationFrame(() => {
+        const el = root.value;
+        if (!locked || !el) return;
+        const nodes = focusables(el);
+        (nodes[0] ?? el).focus();
+      });
     });
   }
 

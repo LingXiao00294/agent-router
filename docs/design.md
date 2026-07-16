@@ -489,7 +489,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 
 每条日志带 `request_id` 方便串联排查。
 
-### 10. Dashboard (Vue) — 后期完善
+### 10. Dashboard (Vue) — 观测与配置管理
 
 Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
 
@@ -514,13 +514,17 @@ Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
 └─────────────────────────────────────────────────────┘
 ```
 
-**技术栈：** Vue 3 + TypeScript + Vite + ECharts (图表) + Tailwind CSS
+**技术栈：** Vue 3 + TypeScript + Vite + ECharts；样式使用项目 CSS token 与组件级响应式布局。
 
 dashboard 作为独立 Vue 目录构建，由独立面板服务代理 router 的 `/api/*` 与 `/v1/*` 请求。
 
 真实模型图表、统计表、Calls 筛选项和调用详情统一通过 `formatActualModel(provider, model)` 生成 `<provider>/<model>`。Provider 与模型在 API、store 和筛选查询中始终是独立字段，展示字符串不参与身份解析。调用详情额外展示四类价格快照，以区分未配置 (`NULL`) 与显式 0。
 
-配置页的数据层与后端领域模型一致：Provider draft 持有 `models: Record<string, ActualModelConfig>`，虚拟模型 draft 只持有有序 `models: ModelRef[]` 和 `pinned_model: ModelRef | null`。虚拟模型页通过按 Provider 分组的组合选择器引用已有实际模型，禁止自由输入、重复引用和引用不存在的目录项；拖拽只改变数组顺序。Provider 或实际模型仍被引用时，前端消费后端固定的 `provider_in_use` / `model_in_use` 错误和 `referenced_by` 列表，保留当前数据并提示先移除引用。
+配置页的数据层与后端领域模型一致：Provider draft 持有 `models: Record<string, ActualModelConfig>`，虚拟模型 draft 只持有有序 `models: ModelRef[]` 和 `pinned_model: ModelRef | null`。Providers 页面采用响应式卡片网格；卡片负责连接摘要、密钥状态、默认最多四个模型标签和可展开的剩余数量，Provider 设置与实际模型价格分别进入独立弹窗。点击模型标签直接编辑该模型，编辑时名称只读；改名必须走“新建、切换引用、删除旧模型”流程。
+
+虚拟模型页通过按 Provider 分组的组合选择器引用已有实际模型，禁止自由输入、重复引用和引用不存在的目录项；没有更多可选目录项时禁用添加按钮，拖拽只改变数组顺序并保留原有过渡动画。选择器与卡片对长 Provider/模型名使用受约束宽度和省略展示，小屏下操作区重新排布，不改变结构化身份。
+
+所有 Provider、实际模型和虚拟模型删除先经过统一确认框。前端本地引用检查与后端删除保护都不允许修改仍被引用的对象；后端返回 `provider_in_use` / `model_in_use` 和 `referenced_by` 时，store 保留原数据并通过 Toast 告知用户先单独保存引用移除。配置保存结果也使用统一 Toast。弹窗共享遮罩关闭、Escape 关闭、焦点陷阱、滚动锁定和触发元素焦点恢复行为。
 
 ---
 

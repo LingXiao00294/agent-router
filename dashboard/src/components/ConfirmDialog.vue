@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useConfirm } from "@/composables/useConfirm";
 import { useOverlayChrome } from "@/composables/useOverlayChrome";
 
@@ -7,6 +7,16 @@ const { state, answer } = useConfirm();
 const dialogRef = ref<HTMLElement | null>(null);
 const open = computed(() => Boolean(state.value));
 useOverlayChrome(open, dialogRef);
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape" || !state.value) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  answer(false);
+}
+
+onMounted(() => window.addEventListener("keydown", onKeydown, true));
+onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 </script>
 
 <template>

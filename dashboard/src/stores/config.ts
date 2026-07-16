@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as api from "@/api";
 import type {
+  ActualModelConfig,
   AppConfig,
   ConfigReferenceError,
   RouterMode,
@@ -415,11 +416,26 @@ export const useConfigStore = defineStore("config", () => {
     return [];
   }
 
-  function addActualModel(provider: string, model: string): boolean {
+  function addActualModel(
+    provider: string,
+    model: string,
+    config: ActualModelConfig = {},
+  ): boolean {
     const providerConfig = draft.value?.providers[provider];
     const name = model.trim();
     if (!providerConfig || !name || providerConfig.models[name]) return false;
-    providerConfig.models[name] = {};
+    providerConfig.models[name] = { ...config };
+    return true;
+  }
+
+  function updateActualModel(
+    provider: string,
+    model: string,
+    config: ActualModelConfig,
+  ): boolean {
+    const providerConfig = draft.value?.providers[provider];
+    if (!providerConfig?.models[model]) return false;
+    providerConfig.models[model] = { ...config };
     return true;
   }
 
@@ -468,6 +484,7 @@ export const useConfigStore = defineStore("config", () => {
     addProvider,
     removeProvider,
     addActualModel,
+    updateActualModel,
     removeActualModel,
     addModel,
     removeModel,
