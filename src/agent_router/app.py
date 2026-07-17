@@ -21,6 +21,7 @@ from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
+from agent_router.recording import CallRecorder
 from agent_router.routing import (
     AllProvidersFailedError,
     NoProviderAvailableError,
@@ -104,23 +105,47 @@ def _sanitize_request_id(raw: str | None) -> str:
     return str(uuid.uuid4())
 
 
+def _record_error_type(error: Exception) -> str:
+    """Return the stable call-history error type for a routing exception."""
+    if isinstance(error, NoProviderAvailableError):
+        return "overloaded_error" if error.kind == "capacity" else "rate_limit_error"
+    if isinstance(error, AllProvidersFailedError):
+        return "all_providers_failed"
+    return type(error).__name__
+
+
+def _stream_error_type(error: Exception) -> str:
+    """Return the Anthropic-compatible error type emitted in an SSE stream."""
+    if isinstance(error, NoProviderAvailableError):
+        return "overloaded_error" if error.kind == "capacity" else "rate_limit_error"
+    return "api_error"
+
+
 def create_app(
-    config: AppConfig, store: CallStore, config_path: str = "config.toml"
+    config: AppConfig,
+    store: CallStore,
+    config_path: str = "config.toml",
+    *,
+    call_recorder: CallRecorder | None = None,
 ) -> FastAPI:
+    """Create the router application and its background call recorder."""
     http_client = httpx.AsyncClient(
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         timeout=httpx.Timeout(300.0, connect=10.0),
     )
+    recorder = call_recorder or CallRecorder(store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
             await store.init()
+            await recorder.start()
             logger.info(
                 "server.start", host=config.server.host, port=config.server.port
             )
             yield
         finally:
+            await recorder.close()
             await http_client.aclose()
             await store.close()
             logger.info("server.shutdown")
@@ -248,12 +273,12 @@ def create_app(
                 except NoProviderAvailableError as e:
                     await _close_prefetched_stream(stream_agen, None)
                     return await _no_provider_response(
-                        e, store, virtual_model, body, start_time
+                        e, recorder, virtual_model, body, start_time
                     )
                 except AllProvidersFailedError as e:
                     await _close_prefetched_stream(stream_agen, None)
                     return await _all_failed_response(
-                        e, store, virtual_model, body, start_time
+                        e, recorder, virtual_model, body, start_time
                     )
                 except UnknownModelError:
                     await _close_prefetched_stream(stream_agen, None)
@@ -280,7 +305,7 @@ def create_app(
                     _stream_wrapper(
                         _prepended(),
                         outcome=outcome,
-                        store=store,
+                        recorder=recorder,
                         virtual_model=virtual_model,
                         request_body=body,
                         start_time=start_time,
@@ -298,7 +323,7 @@ def create_app(
                 result = await engine.route_non_stream(body, outcome)
                 latency_ms = int((time.time() - start_time) * 1000)
                 usage = result.get("usage", {})
-                await store.record(
+                recorder.submit(
                     virtual_model=virtual_model,
                     status="success",
                     provider_name=outcome.get("provider_name"),
@@ -321,7 +346,7 @@ def create_app(
 
         except UnknownModelError as e:
             latency_ms = int((time.time() - start_time) * 1000)
-            await store.record(
+            recorder.submit(
                 virtual_model=virtual_model,
                 status="error",
                 error_type="unknown_model",
@@ -341,15 +366,17 @@ def create_app(
 
         except NoProviderAvailableError as e:
             return await _no_provider_response(
-                e, store, virtual_model, body, start_time
+                e, recorder, virtual_model, body, start_time
             )
 
         except AllProvidersFailedError as e:
-            return await _all_failed_response(e, store, virtual_model, body, start_time)
+            return await _all_failed_response(
+                e, recorder, virtual_model, body, start_time
+            )
 
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
-            await store.record(
+            recorder.submit(
                 virtual_model=virtual_model,
                 status="error",
                 error_type=type(e).__name__,
@@ -384,7 +411,7 @@ def create_app(
             # 注意：对 StreamingResponse，call_next 在响应对象创建后即返回（状态码
             # 200、首字节尚未发送），故此处 duration_ms 仅度量请求 setup / 首字节前
             # 耗时，status_code 恒为 200 即便流中途出错。流式真实耗时与最终状态以
-            # _stream_wrapper 内 store.record(...) 为准。
+            # _stream_wrapper 内异步提交的最终调用记录为准。
             logger.info(
                 "http.request",
                 method=request.method,
@@ -453,7 +480,7 @@ async def _close_prefetched_stream(
 
 async def _no_provider_response(
     e: NoProviderAvailableError,
-    store: CallStore,
+    recorder: CallRecorder,
     virtual_model: str,
     body: dict,
     start_time: float,
@@ -468,8 +495,8 @@ async def _no_provider_response(
         for err in e.errors
     ]
     status_code = 503 if e.kind == "capacity" else 429
-    error_type = "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
-    await store.record(
+    error_type = _record_error_type(e)
+    recorder.submit(
         virtual_model=virtual_model,
         status="error",
         error_type=error_type,
@@ -495,7 +522,7 @@ async def _no_provider_response(
 
 async def _all_failed_response(
     e: AllProvidersFailedError,
-    store: CallStore,
+    recorder: CallRecorder,
     virtual_model: str,
     body: dict,
     start_time: float,
@@ -509,10 +536,10 @@ async def _all_failed_response(
         }
         for err in e.errors
     ]
-    await store.record(
+    recorder.submit(
         virtual_model=virtual_model,
         status="error",
-        error_type="all_providers_failed",
+        error_type=_record_error_type(e),
         error_message=str(e),
         latency_ms=latency_ms,
         request_body=body,
@@ -530,9 +557,9 @@ async def _all_failed_response(
 
 
 async def _stream_wrapper(
-    stream, *, outcome, store, virtual_model, request_body, start_time, request_id
+    stream, *, outcome, recorder, virtual_model, request_body, start_time, request_id
 ):
-    """包装流式响应，在流完成后记录调用数据，同时从 SSE 提取 usage.
+    """包装流式响应，在流完成后提交调用记录，同时从 SSE 提取 usage.
 
     request_id 由端点显式传入：本 wrapper 在中间件清理 contextvars 之后才被
     ASGI 消费，需在此重新绑定，使 routing 层（route_stream 函数体在首次
@@ -575,7 +602,7 @@ async def _stream_wrapper(
 
         # 流成功完成
         latency_ms = int((time.time() - start_time) * 1000)
-        await store.record(
+        recorder.submit(
             virtual_model=virtual_model,
             status="success",
             provider_name=outcome.get("provider_name"),
@@ -605,21 +632,17 @@ async def _stream_wrapper(
                 }
                 for err in e.errors
             ]
-        await store.record(
+        record_error_type = _record_error_type(e)
+        recorder.submit(
             virtual_model=virtual_model,
             status="error",
-            error_type=type(e).__name__,
+            error_type=record_error_type,
             error_message=str(e),
             latency_ms=latency_ms,
             request_body=request_body,
             failover_details=failover,
         )
-        if isinstance(e, NoProviderAvailableError):
-            err_type = (
-                "overloaded_error" if e.kind == "capacity" else "rate_limit_error"
-            )
-        else:
-            err_type = "api_error"
+        err_type = _stream_error_type(e)
         error_body = json.dumps(
             {
                 "type": "error",

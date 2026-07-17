@@ -300,6 +300,7 @@ async def test_streaming_request_id_propagates(tmp_path):
         VirtualModelConfig,
     )
     from agent_router.db import CallStore
+    from agent_router.recording import CallRecorder
     from agent_router.routing import Router
 
     log_file = tmp_path / "app.log"
@@ -337,6 +338,8 @@ async def test_streaming_request_id_propagates(tmp_path):
     router_engine = Router(config, http_client)
     store = CallStore(str(tmp_path / "calls.db"))
     await store.init()
+    recorder = CallRecorder(store)
+    await recorder.start()
 
     # 模拟中间件在返回 StreamingResponse 后已清理上下文（真实 uvicorn 时序）。
     clear_contextvars()
@@ -351,7 +354,7 @@ async def test_streaming_request_id_propagates(tmp_path):
         async for _ in _stream_wrapper(
             router_engine.route_stream(body, outcome),
             outcome=outcome,
-            store=store,
+            recorder=recorder,
             virtual_model="vm",
             request_body=body,
             start_time=time.time(),
@@ -360,6 +363,7 @@ async def test_streaming_request_id_propagates(tmp_path):
             pass
     finally:
         await http_client.aclose()
+        await recorder.close()
         await store.close()
 
     _flush()
