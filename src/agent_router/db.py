@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Required, TypedDict, Unpack
 
 import aiosqlite
 import structlog
@@ -75,6 +75,33 @@ CALL_SCHEMA_COLUMNS = frozenset(
         "failover_details",
     }
 )
+
+
+class CallRecordPayload(TypedDict, total=False):
+    """Keyword fields required to persist one completed API call."""
+
+    virtual_model: Required[str]
+    status: Required[str]
+    provider_name: str | None
+    provider_type: str | None
+    provider_model: str | None
+    provider_url: str | None
+    attempt: int
+    latency_ms: int | None
+    request_body: dict | None
+    error_type: str | None
+    error_message: str | None
+    response_body: dict | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    input_price_per_million: float | None
+    output_price_per_million: float | None
+    cache_read_price_per_million: float | None
+    cache_write_price_per_million: float | None
+    cost_usd: float | None
+    failover_details: list[dict] | None
 
 
 class IncompatibleDatabaseError(RuntimeError):
@@ -151,40 +178,18 @@ class CallStore:
             await self._conn.close()
             self._conn = None
 
-    async def record(
-        self,
-        *,
-        virtual_model: str,
-        status: str,
-        provider_name: str | None = None,
-        provider_type: str | None = None,
-        provider_model: str | None = None,
-        provider_url: str | None = None,
-        attempt: int = 1,
-        latency_ms: int | None = None,
-        request_body: dict | None = None,
-        error_type: str | None = None,
-        error_message: str | None = None,
-        response_body: dict | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        cache_read_tokens: int | None = None,
-        cache_write_tokens: int | None = None,
-        input_price_per_million: float | None = None,
-        output_price_per_million: float | None = None,
-        cache_read_price_per_million: float | None = None,
-        cache_write_price_per_million: float | None = None,
-        cost_usd: float | None = None,
-        failover_details: list[dict] | None = None,
-    ) -> str:
+    async def record(self, **record: Unpack[CallRecordPayload]) -> str:
         """Persist one call and return its generated identifier.
 
-        Price arguments are snapshots of the final successful provider model.
-        Callers leave them as ``None`` when no model completed successfully.
+        Price fields are snapshots of the final successful provider model.
+        Callers omit them or pass ``None`` when no model completed successfully.
         """
         call_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
+        request_body = record.get("request_body")
+        response_body = record.get("response_body")
+        failover_details = record.get("failover_details")
         request_tokens = _estimate_request_tokens(request_body)
         resp_json = (
             json.dumps(response_body, ensure_ascii=False) if response_body else None
@@ -215,28 +220,28 @@ class CallStore:
             (
                 call_id,
                 now,
-                virtual_model,
-                provider_name,
-                provider_type,
-                provider_model,
-                provider_url,
-                attempt,
-                latency_ms,
+                record["virtual_model"],
+                record.get("provider_name"),
+                record.get("provider_type"),
+                record.get("provider_model"),
+                record.get("provider_url"),
+                record.get("attempt", 1),
+                record.get("latency_ms"),
                 req_json,
                 request_tokens,
-                status,
-                error_type,
-                error_message,
+                record["status"],
+                record.get("error_type"),
+                record.get("error_message"),
                 resp_json,
-                input_tokens,
-                output_tokens,
-                cache_read_tokens,
-                cache_write_tokens,
-                input_price_per_million,
-                output_price_per_million,
-                cache_read_price_per_million,
-                cache_write_price_per_million,
-                cost_usd,
+                record.get("input_tokens"),
+                record.get("output_tokens"),
+                record.get("cache_read_tokens"),
+                record.get("cache_write_tokens"),
+                record.get("input_price_per_million"),
+                record.get("output_price_per_million"),
+                record.get("cache_read_price_per_million"),
+                record.get("cache_write_price_per_million"),
+                record.get("cost_usd"),
                 fo_json,
             ),
         )

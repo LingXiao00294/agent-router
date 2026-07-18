@@ -23,7 +23,8 @@ from agent_router.config import (
     parse_config_data,
 )
 from agent_router.db import CallStore
-from agent_router.routing import Router
+from agent_router.recording import CallRecorder
+from agent_router.routing import NoProviderAvailableError, Router
 
 
 class TestCostCalculation:
@@ -49,7 +50,7 @@ class TestCostCalculation:
         assert _calculate_cost_usd({"input_tokens": 1_000_000}, {}) == 0.0
 
     @pytest.mark.asyncio
-    async def test_streaming_route_persists_calculated_cost(self, store):
+    async def test_streaming_route_persists_calculated_cost(self, store, recorder):
         """Persist streamed usage cost with the selected provider prices."""
         sse = (
             b"event: message_start\n"
@@ -102,7 +103,7 @@ class TestCostCalculation:
             async for _ in _stream_wrapper(
                 router.route_stream(body, outcome),
                 outcome=outcome,
-                store=store,
+                recorder=recorder,
                 virtual_model="priced",
                 request_body=body,
                 start_time=0.0,
@@ -112,6 +113,7 @@ class TestCostCalculation:
         finally:
             await http_client.aclose()
 
+        await recorder.wait_idle(timeout=1)
         calls, total = await store.list_calls()
         assert total == 1
         assert calls[0]["input_tokens"] == 100
@@ -126,7 +128,7 @@ class TestCostCalculation:
 
     @pytest.mark.parametrize("configured_price", [None, 0.0])
     async def test_non_stream_preserves_missing_and_zero_prices(
-        self, store, configured_price
+        self, store, recorder, configured_price
     ):
         response = {
             "id": "msg_1",
@@ -171,13 +173,14 @@ class TestCostCalculation:
         }
 
         async with httpx.AsyncClient(transport=transport) as upstream:
-            app = create_app(config, store)
+            app = create_app(config, store, call_recorder=recorder)
             app.state.router_engine = Router(config, upstream)
             asgi = ASGITransport(app=app)
             async with AsyncClient(transport=asgi, base_url="http://test") as client:
                 api_response = await client.post("/v1/messages", json=body)
 
         assert api_response.status_code == 200
+        await recorder.wait_idle(timeout=1)
         calls, total = await store.list_calls()
         assert total == 1
         for column in (
@@ -189,7 +192,9 @@ class TestCostCalculation:
             assert calls[0][column] == configured_price
         assert calls[0]["cost_usd"] == 0.0
 
-    async def test_non_stream_failover_persists_final_provider_prices(self, store):
+    async def test_non_stream_failover_persists_final_provider_prices(
+        self, store, recorder
+    ):
         usage = {
             "input_tokens": 1_000_000,
             "output_tokens": 500_000,
@@ -243,13 +248,14 @@ class TestCostCalculation:
         body = {"model": "router", "max_tokens": 100, "messages": []}
 
         async with httpx.AsyncClient(transport=transport) as upstream:
-            app = create_app(config, store)
+            app = create_app(config, store, call_recorder=recorder)
             app.state.router_engine = Router(config, upstream)
             asgi = ASGITransport(app=app)
             async with AsyncClient(transport=asgi, base_url="http://test") as client:
                 response = await client.post("/v1/messages", json=body)
 
         assert response.status_code == 200
+        await recorder.wait_idle(timeout=1)
         calls, total = await store.list_calls()
         assert total == 1
         call = calls[0]
@@ -262,7 +268,9 @@ class TestCostCalculation:
         assert call["cache_write_price_per_million"] == 1.2
         assert call["cost_usd"] == 3.5
 
-    async def test_stream_failover_persists_final_provider_prices(self, store):
+    async def test_stream_failover_persists_final_provider_prices(
+        self, store, recorder
+    ):
         first_error = (
             b'event: error\ndata: {"type":"error","error":'
             b'{"type":"api_error","message":"first failed"}}\n\n'
@@ -330,7 +338,7 @@ class TestCostCalculation:
                 async for chunk in _stream_wrapper(
                     router.route_stream(body, outcome),
                     outcome=outcome,
-                    store=store,
+                    recorder=recorder,
                     virtual_model="router",
                     request_body=body,
                     start_time=0.0,
@@ -339,6 +347,7 @@ class TestCostCalculation:
             ]
 
         assert b"event: error" not in b"".join(chunks)
+        await recorder.wait_idle(timeout=1)
         calls, total = await store.list_calls()
         assert total == 1
         call = calls[0]
@@ -351,7 +360,7 @@ class TestCostCalculation:
         assert call["cache_write_price_per_million"] == 3.0
         assert call["cost_usd"] == pytest.approx(0.00059)
 
-    async def test_failed_call_has_null_price_snapshots(self, store):
+    async def test_failed_call_has_null_price_snapshots(self, store, recorder):
         transport = httpx.MockTransport(
             lambda request: httpx.Response(500, text="upstream failed")
         )
@@ -380,13 +389,14 @@ class TestCostCalculation:
         body = {"model": "router", "max_tokens": 100, "messages": []}
 
         async with httpx.AsyncClient(transport=transport) as upstream:
-            app = create_app(config, store)
+            app = create_app(config, store, call_recorder=recorder)
             app.state.router_engine = Router(config, upstream)
             asgi = ASGITransport(app=app)
             async with AsyncClient(transport=asgi, base_url="http://test") as client:
                 response = await client.post("/v1/messages", json=body)
 
         assert response.status_code == 502
+        await recorder.wait_idle(timeout=1)
         calls, total = await store.list_calls()
         assert total == 1
         call = calls[0]
@@ -469,13 +479,25 @@ def app_config():
 async def store():
     s = CallStore(":memory:")
     await s.init()
-    yield s
-    await s.close()
+    try:
+        yield s
+    finally:
+        await s.close()
 
 
 @pytest.fixture
-async def client(app_config, store):
-    app = create_app(app_config, store)
+async def recorder(store):
+    call_recorder = CallRecorder(store)
+    await call_recorder.start()
+    try:
+        yield call_recorder
+    finally:
+        await call_recorder.close()
+
+
+@pytest.fixture
+async def client(app_config, store, recorder):
+    app = create_app(app_config, store, call_recorder=recorder)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -529,8 +551,153 @@ class TestMessages:
         # 预期 502 因为 api key 是假的, 或者 401 从上游透传
         assert resp.status_code in (401, 502)
 
+    async def test_non_stream_success_survives_record_failure(
+        self, app_config, store, recorder, monkeypatch
+    ):
+        attempted_records: list[dict] = []
+
+        async def fail_record(**record):
+            attempted_records.append(record)
+            raise OSError("database unavailable")
+
+        monkeypatch.setattr(store, "record", fail_record)
+        app_config.router.mode = "failover"
+        upstream_response = {
+            "id": "msg_success",
+            "type": "message",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, json=upstream_response)
+        )
+
+        async with httpx.AsyncClient(transport=transport) as upstream:
+            app = create_app(app_config, store, call_recorder=recorder)
+            app.state.router_engine = Router(app_config, upstream)
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as api_client:
+                response = await api_client.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-router",
+                        "max_tokens": 10,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                )
+
+        await recorder.wait_idle(timeout=1)
+        assert response.status_code == 200
+        assert response.json() == upstream_response
+        assert len(attempted_records) == 1
+        assert attempted_records[0]["status"] == "success"
+
+    async def test_stream_success_survives_record_failure(
+        self, app_config, store, recorder, monkeypatch
+    ):
+        attempted_records: list[dict] = []
+
+        async def fail_record(**record):
+            attempted_records.append(record)
+            raise OSError("database unavailable")
+
+        monkeypatch.setattr(store, "record", fail_record)
+        app_config.router.mode = "failover"
+        sse = (
+            b"event: message_start\n"
+            b'data: {"message":{"usage":{"input_tokens":1}}}\n\n'
+            b"event: message_delta\n"
+            b'data: {"usage":{"output_tokens":1}}\n\n'
+            b"event: message_stop\ndata: {}\n\n"
+        )
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, content=sse)
+        )
+
+        async with httpx.AsyncClient(transport=transport) as upstream:
+            app = create_app(app_config, store, call_recorder=recorder)
+            app.state.router_engine = Router(app_config, upstream)
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as api_client:
+                response = await api_client.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-router",
+                        "stream": True,
+                        "max_tokens": 10,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                )
+
+        await recorder.wait_idle(timeout=1)
+        assert response.status_code == 200
+        assert b"event: error" not in response.content
+        assert b"event: message_stop" in response.content
+        assert len(attempted_records) == 1
+        assert attempted_records[0]["status"] == "success"
+
+    async def test_error_response_survives_record_failure(
+        self, client, store, recorder, monkeypatch
+    ):
+        attempted_records: list[dict] = []
+
+        async def fail_record(**record):
+            attempted_records.append(record)
+            raise OSError("database unavailable")
+
+        monkeypatch.setattr(store, "record", fail_record)
+
+        response = await client.post(
+            "/v1/messages",
+            json={"model": "missing", "max_tokens": 10, "messages": []},
+        )
+
+        await recorder.wait_idle(timeout=1)
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert len(attempted_records) == 1
+        assert attempted_records[0]["error_type"] == "unknown_model"
+
+    async def test_stream_rate_limit_uses_semantic_record_error_type(
+        self, store, recorder
+    ):
+        async def rate_limited_stream():
+            yield b"event: message_start\ndata: {}\n\n"
+            raise NoProviderAvailableError(
+                "test-router",
+                [
+                    {
+                        "provider": "anthropic",
+                        "model": "real-model",
+                        "error": "rate limited",
+                    }
+                ],
+                kind="rate_limit",
+                retry_after=1,
+            )
+
+        chunks = [
+            chunk
+            async for chunk in _stream_wrapper(
+                rate_limited_stream(),
+                outcome={},
+                recorder=recorder,
+                virtual_model="test-router",
+                request_body={"model": "test-router", "stream": True},
+                start_time=0,
+                request_id="req-stream-rate-limit",
+            )
+        ]
+        await recorder.wait_idle(timeout=1)
+        calls, total = await store.list_calls()
+
+        assert total == 1
+        assert calls[0]["error_type"] == "rate_limit_error"
+        assert b'"type": "rate_limit_error"' in b"".join(chunks)
+
     @pytest.mark.asyncio
-    async def test_stream_rate_limit_returns_http_429(self, store):
+    async def test_stream_rate_limit_returns_http_429(self, store, recorder):
         """流式在首字节前限流时返回 HTTP 429 + Retry-After，而非 SSE 内嵌错误."""
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -557,7 +724,7 @@ class TestMessages:
                 )
             },
         )
-        app = create_app(config, store)
+        app = create_app(config, store, call_recorder=recorder)
         # 注入带 mock transport 的 router
         app.state.router_engine = Router(config, http_client)
 
@@ -579,7 +746,9 @@ class TestMessages:
         assert resp.json()["error"]["type"] == "rate_limit_error"
 
     @pytest.mark.asyncio
-    async def test_stream_prefetch_timeout_still_returns_sse(self, store, monkeypatch):
+    async def test_stream_prefetch_timeout_still_returns_sse(
+        self, store, recorder, monkeypatch
+    ):
         """首字节预取超时后仍应先返回 SSE 头，再在响应体中交付内容."""
         import agent_router.app as app_mod
 
@@ -613,7 +782,7 @@ class TestMessages:
                 )
             },
         )
-        app = create_app(config, store)
+        app = create_app(config, store, call_recorder=recorder)
         app.state.router_engine = Router(config, http_client)
 
         asgi = ASGITransport(app=app)

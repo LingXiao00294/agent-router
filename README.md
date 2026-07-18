@@ -141,7 +141,7 @@ models = [
 
 实际模型及价格只在对应 Provider 的 `models` 目录下定义一次。虚拟模型的 `models` 数组只能引用目录中已有的 `{ provider, model }`，数组顺序会在运行时生成从 1 开始的优先级；sticky 模式还必须提供位于该数组中的结构化 `pinned_model`。同一虚拟模型不能重复引用同一个实际模型。
 
-四类价格均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。每次成功调用都会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，四类价格快照保持 `NULL`。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
+四类价格均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。正常写入的成功调用会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，四类价格快照保持 `NULL`。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
 
 > **Breaking change**：旧版 `[[models.<name>.providers]]`、显式 `priority`、引用上的价格字段以及 `pinned_provider` 不再读取，也不会自动迁移。升级时请先把实际模型移入 `providers.<provider>.models`，再把虚拟模型改为上面的有序 `models` 与结构化 `pinned_model`；程序遇到旧格式会返回可操作的配置错误，不会改写原文件。
 
@@ -167,6 +167,8 @@ models = [
 `PUT /api/config` 会先完成候选配置校验、TOML 序列化验证和运行时构建，再原子替换文件并切换 Router 与日志配置；任一步失败都会保留或恢复旧文件与旧运行时。删除仍被引用的 Provider 或实际模型会返回 `409` 和 `provider_in_use` / `model_in_use`，并在 `referenced_by` 中列出虚拟模型。必须先单独保存引用移除，再执行删除。
 
 ### 调用记录数据库兼容性
+
+调用记录属于尽力而为的观测数据。请求完成后会先提交到进程内有界队列，再由单个后台 writer 顺序写入 SQLite；API 响应不会等待磁盘提交。队列已满、SQLite 写入失败或服务关闭时未能在超时内排空，会记录 `call_record.dropped`、`call_record.failed`、`call_record.shutdown_timeout` 或 `call_record.cancelled` 日志，但不会把已经成功的模型响应改成失败。worker 的失败/取消日志会保留提交时的 `request_id`，便于关联请求链路。对应调用记录在这些情况下可能缺失，因此 `calls.db` 不应直接作为严格计费或审计账本。
 
 本版本的 `calls` 表新增四类价格快照字段，不兼容缺少这些字段的旧 `calls.db`，也不会执行自动迁移。启动时若检测到旧 schema，服务会列出缺失字段并提示手动重建；程序不会删除、覆盖或修改原数据库。请先停止服务并备份或重命名旧文件，例如：
 
@@ -212,6 +214,7 @@ src/agent_router/
 ├── app.py               # FastAPI 应用 + 路由处理
 ├── config.py            # TOML 加载 + ${ENV_VAR} 展开 + Pydantic 校验
 ├── routing.py           # 核心：优先级链 + 故障转移
+├── recording.py         # 有界队列 + 后台调用记录 writer
 ├── db.py                # SQLite 调用记录 (aiosqlite)
 ├── monitoring.py        # 结构化日志 (structlog)
 ├── providers/

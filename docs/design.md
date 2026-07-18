@@ -27,6 +27,7 @@ agent-router/
 │   ├── config.py                   # TOML 加载 + ${ENV_VAR} 插值 + Pydantic 校验
 │   ├── routing.py                  # 核心: 优先级链 + 故障转移 + 熔断
 │   ├── circuit_breaker.py          # Per-provider 熔断器 (CLOSED/OPEN/HALF_OPEN)
+│   ├── recording.py                # 有界队列 + 后台调用记录 writer
 │   ├── providers/
 │   │   ├── __init__.py
 │   │   ├── base.py                 # 抽象 Provider 接口
@@ -387,9 +388,11 @@ def main():
     uvicorn.run(app, host=config.server.host, port=config.server.port)
 ```
 
-### 7. db.py — 调用记录持久化
+### 7. recording.py + db.py — 调用记录持久化
 
-使用 `aiosqlite` 异步写入 SQLite，记录每次 API 调用的完整信息。
+`CallRecorder` 将请求路径与 SQLite I/O 隔离：请求完成后通过非阻塞 `submit()` 写入进程内有界队列，单个后台 writer 再调用 `CallStore`，使用 `aiosqlite` 顺序写入每次 API 调用的完整信息。writer 随 FastAPI lifespan 启动，关闭时在有限时间内排空已接收记录，然后才关闭数据库。
+
+调用记录被定义为尽力而为的观测数据。队列已满、SQLite 写入失败或关闭排空超时时只记录结构化错误，不改变正常、错误或流式 API 响应；这些情况下允许缺失对应调用记录。提交时的 `request_id` 会随队列项进入后台 writer，用于关联 `call_record.failed` / `call_record.cancelled` 与原请求。该存储不承担严格计费或审计账本职责。
 
 **表结构：**
 
@@ -439,6 +442,8 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 
 **写入语义：**
 
+- 请求路径不等待 SQLite 提交；有界队列满时立即丢弃新记录，避免观测背压阻塞模型调用。
+- 单条记录写入失败不会终止后台 writer，后续记录仍会继续处理。
 - 非流式与流式请求都在最终 Provider 成功后写入其结构化 `provider_name`、`provider_model` 和四类价格快照；首选失败后的 failover 使用最终成功模型的数据。
 - `cost_usd = Σ(token_count × (price_snapshot or 0)) / 1_000_000`。未配置价格的快照保持 `NULL`，只在公式中按 0；显式价格 0 保持为 0。
 - 没有实际成功模型的失败调用不写入价格，四类字段保持 `NULL`。
@@ -556,6 +561,7 @@ dashboard 作为独立 Vue 目录构建，由独立面板服务代理 router 的
 | 路由状态 | 有状态 (熔断器) | 每请求独立遍历 provider 链，但通过熔断器跳过持续故障的 provider |
 | 流式故障转移 | 无缓冲直传 | SSE 字节边收边发，优先保证延迟；流中断由 Claude Code 自动重试触发下一 provider |
 | HTTP 客户端 | 单实例复用 | 进程级 httpx.AsyncClient，按 base_url 自动连接池隔离 |
+| 调用记录 | 有界内存队列 + 单后台 writer | 观测存储故障不改变模型响应；队列满或 SQLite 故障时允许丢失记录 |
 | 配置热更新 | 原子写盘 + 运行时回滚 | 候选配置先完整验证；文件、Router、日志任一步失败都恢复旧状态 |
 | Provider 接口 | 统一 Anthropic 格式 | routing.py 不感知后端协议，OpenAI 适配器内部转换 |
 | 熔断策略 | Per-provider 三态 | 401/403 立即熔断，429/529/5xx 连续失败后熔断，60s 后半开探测 |
