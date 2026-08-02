@@ -21,8 +21,10 @@ export const useMetricsStore = defineStore("metrics", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
   const loadedOnce = ref(false);
+  let refreshSeq = 0;
 
   async function refresh(silent = false) {
+    const seq = ++refreshSeq;
     if (!silent) loading.value = true;
     error.value = null;
     try {
@@ -34,6 +36,7 @@ export const useMetricsStore = defineStore("metrics", () => {
         api.getByProvider(),
         api.getDaily(d),
       ]);
+      if (seq !== refreshSeq) return;
       summary.value = s;
       byRealModel.value = real;
       byModel.value = virt;
@@ -41,10 +44,11 @@ export const useMetricsStore = defineStore("metrics", () => {
       daily.value = fillDailyGaps(dayRows, d);
       loadedOnce.value = true;
     } catch (err) {
+      if (seq !== refreshSeq) return;
       error.value = err instanceof Error ? err.message : "加载指标失败";
       if (!silent) throw err;
     } finally {
-      loading.value = false;
+      if (seq === refreshSeq) loading.value = false;
     }
   }
 

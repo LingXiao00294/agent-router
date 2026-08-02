@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  ref,
+  watch,
+  type ComponentPublicInstance,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useCallsStore } from "@/stores/calls";
@@ -22,6 +29,8 @@ const router = useRouter();
 const { page, loading, error, detail } = storeToRefs(store);
 const metrics = useMetricsStore();
 const { byRealModel: actualModels } = storeToRefs(metrics);
+const pageHeading = ref<HTMLElement | null>(null);
+const detailButtons = new Map<string, HTMLButtonElement>();
 
 const filters = computed(() => ({
   page: parsePositiveInt(route.query.page, 1),
@@ -95,14 +104,40 @@ function updateQuery(patch: Record<string, string | number | undefined>) {
   void router.replace({ query: next });
 }
 
+function setDetailButtonRef(
+  id: string,
+  element: Element | ComponentPublicInstance | null,
+) {
+  if (element instanceof HTMLButtonElement) detailButtons.set(id, element);
+  else detailButtons.delete(id);
+}
+
 function openDetail(id: string) {
   updateQuery({ id });
+}
+
+function openDetailFromRow(event: MouseEvent, id: string) {
+  const target = event.target;
+  if (
+    target instanceof Element &&
+    target.closest("button, a, input, select, textarea, [role='button'], [role='link']")
+  ) {
+    return;
+  }
+  openDetail(id);
 }
 
 function closeDetail() {
   const q = { ...route.query };
   delete q.id;
   void router.replace({ query: q });
+}
+
+async function restoreDetailFocus(id: string) {
+  await nextTick();
+  const trigger = detailButtons.get(id);
+  if (trigger?.isConnected) trigger.focus();
+  else pageHeading.value?.focus();
 }
 
 onMounted(() => {
@@ -131,9 +166,13 @@ useAutoRefresh(async () => {
 
 watch(
   () => route.query.id,
-  (id) => {
-    if (typeof id === "string") void store.fetchDetail(id);
-    else store.clearDetail();
+  (id, previousId) => {
+    if (typeof id === "string") {
+      void store.fetchDetail(id);
+      return;
+    }
+    store.clearDetail();
+    if (typeof previousId === "string") void restoreDetailFocus(previousId);
   },
   { immediate: true },
 );
@@ -159,23 +198,25 @@ const emptyKind = computed(() => {
   <div class="page fade-up">
     <header class="page-head">
       <div>
-        <h1>Calls</h1>
+        <h1 ref="pageHeading" tabindex="-1">Calls</h1>
         <p class="muted">调用记录与故障转移详情</p>
       </div>
     </header>
 
     <div class="filters panel">
       <div class="field">
-        <label>虚拟模型</label>
+        <label for="calls-filter-model">虚拟模型</label>
         <input
+          id="calls-filter-model"
           :value="filters.model"
           placeholder="全部"
           @change="updateQuery({ model: ($event.target as HTMLInputElement).value, page: 1 })"
         />
       </div>
       <div class="field">
-        <label>状态</label>
+        <label for="calls-filter-status">状态</label>
         <select
+          id="calls-filter-status"
           :value="filters.status"
           @change="updateQuery({ status: ($event.target as HTMLSelectElement).value, page: 1 })"
         >
@@ -185,8 +226,9 @@ const emptyKind = computed(() => {
         </select>
       </div>
       <div class="field">
-        <label>真实模型</label>
+        <label for="calls-filter-actual-model">真实模型</label>
         <select
+          id="calls-filter-actual-model"
           :value="selectedActualModelKey"
           @change="updateActualModelFilter(($event.target as HTMLSelectElement).value)"
         >
@@ -207,8 +249,9 @@ const emptyKind = computed(() => {
         </select>
       </div>
       <div class="field">
-        <label>每页</label>
+        <label for="calls-filter-size">每页</label>
         <select
+          id="calls-filter-size"
           :value="filters.size"
           @change="updateQuery({ size: Number(($event.target as HTMLSelectElement).value), page: 1 })"
         >
@@ -239,13 +282,14 @@ const emptyKind = computed(() => {
               <th>Token</th>
               <th>Cache</th>
               <th>费用</th>
+              <th class="col-action"><span class="sr-only">操作</span></th>
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="row in page?.data || []"
               :key="row.id"
-              @click="openDetail(row.id)"
+              @click="openDetailFromRow($event, row.id)"
             >
               <td class="mono">{{ formatTime(row.timestamp) }}</td>
               <td class="mono">{{ row.virtual_model }}</td>
@@ -275,6 +319,17 @@ const emptyKind = computed(() => {
                 {{ formatTokens(row.cache_write_tokens) }}
               </td>
               <td class="mono">{{ formatUsd(row.cost_usd) }}</td>
+              <td class="col-action">
+                <button
+                  :ref="(element) => setDetailButtonRef(row.id, element)"
+                  class="btn btn-sm detail-btn"
+                  type="button"
+                  :aria-label="`查看调用 ${row.id} 详情`"
+                  @click.stop="openDetail(row.id)"
+                >
+                  详情
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -343,7 +398,11 @@ const emptyKind = computed(() => {
 }
 .pager-btns {
   display: flex;
+  flex-shrink: 0;
   gap: 0.4rem;
+}
+.pager-btns .btn {
+  white-space: nowrap;
 }
 .status-cell {
   display: flex;
@@ -356,9 +415,37 @@ table.data .col-model {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.col-action {
+  width: 1%;
+  text-align: right;
+}
+.detail-btn {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
 @media (max-width: 800px) {
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  table.data .col-action {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    background: var(--bg-elevated);
+    box-shadow: -8px 0 12px -12px rgba(21, 32, 43, 0.45);
+  }
+}
+
+@media (max-width: 520px) {
+  .pager {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .pager-btns {
+    margin-left: auto;
   }
 }
 </style>

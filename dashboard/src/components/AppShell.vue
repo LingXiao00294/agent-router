@@ -318,6 +318,7 @@ function onInterval(e: Event) {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  white-space: nowrap;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-muted);
@@ -385,6 +386,18 @@ function onInterval(e: Event) {
   .nav {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .top {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .top-actions {
+    justify-content: flex-start;
   }
 }
 </style>

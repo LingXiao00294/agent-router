@@ -40,6 +40,23 @@ function referenceConflict(error: unknown): ConfigReferenceError | null {
   return candidate as ConfigReferenceError;
 }
 
+function validProviderBaseUrl(value: string): boolean {
+  if (!value || /\s/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const useConfigStore = defineStore("config", () => {
   const draft = ref<AppConfig | null>(null);
   const baseline = ref<string>("");
@@ -51,6 +68,8 @@ export const useConfigStore = defineStore("config", () => {
   const error = ref<string | null>(null);
   const fieldErrors = ref<Record<string, string>>({});
   let loadPromise: Promise<void> | null = null;
+  let loadPromiseContext: string | null = null;
+  let loadGeneration = 0;
 
   const dirty = computed(() => {
     if (!draft.value) return false;
@@ -83,10 +102,29 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
-  /** Reuse the active request so callers always initialize one consistent draft. */
-  function load(): Promise<void> {
-    if (loadPromise) return loadPromise;
+  /** Capture all user-editable state so an in-flight load cannot replace newer edits. */
+  function loadContext(): string | null {
+    return draft.value ? JSON.stringify(buildPayload()) : null;
+  }
 
+  function invalidateLoad() {
+    loadGeneration += 1;
+    loadPromise = null;
+    loadPromiseContext = null;
+    loading.value = false;
+  }
+
+  function loadIsCurrent(generation: number, context: string | null): boolean {
+    return generation === loadGeneration && loadContext() === context;
+  }
+
+  /** Reuse an ordinary active request; forced loads always start a newer generation. */
+  function startLoad(force = false): Promise<void> {
+    const context = loadContext();
+    if (!force && loadPromise && loadPromiseContext === context) return loadPromise;
+    if (!force && saving.value) return Promise.resolve();
+
+    const generation = ++loadGeneration;
     const request = (async () => {
       loading.value = true;
       error.value = null;
@@ -95,6 +133,7 @@ export const useConfigStore = defineStore("config", () => {
           api.getConfig(),
           api.getConfigModels(),
         ]);
+        if (!loadIsCurrent(generation, context)) return;
         const normalized = normalizeAppConfig(cfg);
         draft.value = cloneConfig(normalized);
         models.value = normalizeModels(normalized.models, normModels);
@@ -103,22 +142,34 @@ export const useConfigStore = defineStore("config", () => {
         baseline.value = JSON.stringify(buildPayload());
         fieldErrors.value = {};
       } catch (err) {
+        if (!loadIsCurrent(generation, context)) return;
         error.value = err instanceof Error ? err.message : "加载配置失败";
         throw err;
       } finally {
-        loading.value = false;
+        if (generation === loadGeneration) loading.value = false;
       }
     })();
     loadPromise = request;
+    loadPromiseContext = context;
     void request.then(
       () => {
-        if (loadPromise === request) loadPromise = null;
+        if (loadPromise === request) {
+          loadPromise = null;
+          loadPromiseContext = null;
+        }
       },
       () => {
-        if (loadPromise === request) loadPromise = null;
+        if (loadPromise === request) {
+          loadPromise = null;
+          loadPromiseContext = null;
+        }
       },
     );
     return request;
+  }
+
+  function load(): Promise<void> {
+    return startLoad();
   }
 
   function validate(): boolean {
@@ -133,17 +184,17 @@ export const useConfigStore = defineStore("config", () => {
     if (!Number.isFinite(s.port) || s.port < 1 || s.port > 65535) {
       errs["server.port"] = "端口需在 1–65535";
     }
-    if (!Number.isFinite(s.log_max_bytes) || s.log_max_bytes < 0) {
-      errs["server.log_max_bytes"] = "需为 ≥ 0 的数字";
+    if (!Number.isFinite(s.log_max_bytes) || s.log_max_bytes <= 0) {
+      errs["server.log_max_bytes"] = "需为 > 0 的数字";
     }
     if (!Number.isFinite(s.log_backup_count) || s.log_backup_count < 0) {
       errs["server.log_backup_count"] = "需为 ≥ 0 的数字";
     }
     if (
       !Number.isFinite(draft.value.router.failure_threshold) ||
-      draft.value.router.failure_threshold < 0
+      draft.value.router.failure_threshold < 1
     ) {
-      errs["router.failure_threshold"] = "需 ≥ 0";
+      errs["router.failure_threshold"] = "需 ≥ 1";
     }
     if (
       !Number.isFinite(draft.value.router.recovery_timeout) ||
@@ -160,7 +211,10 @@ export const useConfigStore = defineStore("config", () => {
     }
 
     for (const [name, p] of Object.entries(draft.value.providers)) {
-      if (!p.base_url.trim()) errs[`providers.${name}.base_url`] = "必填";
+      if (!validProviderBaseUrl(p.base_url)) {
+        errs[`providers.${name}.base_url`] =
+          "需为不含用户信息、查询参数或片段的绝对 HTTP(S) URL";
+      }
       if (!Number.isFinite(p.timeout_seconds) || p.timeout_seconds <= 0) {
         errs[`providers.${name}.timeout`] = "需 > 0";
       }
@@ -190,9 +244,9 @@ export const useConfigStore = defineStore("config", () => {
       }
       if (
         p.failure_threshold != null &&
-        (!Number.isFinite(p.failure_threshold) || p.failure_threshold < 0)
+        (!Number.isFinite(p.failure_threshold) || p.failure_threshold < 1)
       ) {
-        errs[`providers.${name}.failure_threshold`] = "需 ≥ 0 或留空";
+        errs[`providers.${name}.failure_threshold`] = "需 ≥ 1 或留空";
       }
       if (
         p.recovery_timeout != null &&
@@ -285,12 +339,17 @@ export const useConfigStore = defineStore("config", () => {
     if (!validate()) {
       throw new Error(validationFailureMessage("save"));
     }
+    const payload = buildPayload();
+    const payloadSnapshot = JSON.stringify(payload);
+    invalidateLoad();
     saving.value = true;
     error.value = null;
     try {
-      const payload = buildPayload();
       await api.putConfig(payload);
-      await load();
+      baseline.value = payloadSnapshot;
+      if (loadContext() === payloadSnapshot) {
+        await startLoad(true);
+      }
     } catch (err) {
       const conflict = referenceConflict(err);
       if (conflict) {
@@ -340,8 +399,14 @@ export const useConfigStore = defineStore("config", () => {
         };
         throw new Error(validationFailureMessage("switch"));
       }
-      await api.putConfig(buildPayload());
-      await load();
+      const payload = buildPayload();
+      const payloadSnapshot = JSON.stringify(payload);
+      invalidateLoad();
+      await api.putConfig(payload);
+      baseline.value = payloadSnapshot;
+      if (loadContext() === payloadSnapshot) {
+        await startLoad(true);
+      }
     } catch (err) {
       if (draft.value && draft.value.router.mode === next) {
         draft.value = {

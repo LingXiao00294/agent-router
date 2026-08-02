@@ -173,14 +173,19 @@ useAutoRefresh(async () => {
   border-color: transparent;
   color: var(--accent);
 }
-@media (max-width: 680px) {
+@media (max-width: 860px) {
+  .page {
+    padding-bottom: 4.5rem;
+  }
+
   .page-head {
     padding-right: 0;
-    padding-top: 3.75rem;
   }
+
   .floating-actions {
-    top: calc(var(--header-height) + 0.5rem);
+    top: auto;
     right: 0.75rem;
+    bottom: 0.75rem;
   }
 }
 </style>

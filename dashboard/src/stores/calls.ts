@@ -10,6 +10,7 @@ export const useCallsStore = defineStore("calls", () => {
   const detailLoading = ref(false);
   const error = ref<string | null>(null);
   const detailError = ref<string | null>(null);
+  let listSeq = 0;
   let detailSeq = 0;
 
   async function fetchList(
@@ -23,15 +24,19 @@ export const useCallsStore = defineStore("calls", () => {
     },
     silent = false,
   ) {
+    const seq = ++listSeq;
     if (!silent) loading.value = true;
     error.value = null;
     try {
-      page.value = await api.getCalls(params);
+      const result = await api.getCalls(params);
+      if (seq !== listSeq) return;
+      page.value = result;
     } catch (err) {
+      if (seq !== listSeq) return;
       error.value = err instanceof Error ? err.message : "加载调用失败";
       if (!silent) throw err;
     } finally {
-      loading.value = false;
+      if (seq === listSeq) loading.value = false;
     }
   }
 
