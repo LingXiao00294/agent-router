@@ -32,6 +32,12 @@ curl http://127.0.0.1:9456/health
 
 router 默认监听 `http://127.0.0.1:9456`，dashboard 默认监听 `http://127.0.0.1:5173` 并代理到 router。
 
+## 安全边界
+
+Router 不校验客户端传入的 Anthropic token，Dashboard 还能读取调用详情、修改配置和重置熔断器；`calls.db` 会保存请求与响应正文（单项超过 256 KiB 时保存带 `_truncated` 标记的有界预览），其中仍可能包含提示词、模型输出和其他敏感数据。请限制配置文件、数据库、日志及备份的文件权限，并按自身保留策略清理。
+
+CLI 默认拒绝绑定 `0.0.0.0`、`::` 或其他非回环地址。只有在受信网络或已配置鉴权与 TLS 的反向代理之后，才应显式添加 `--allow-remote`；该开关只确认风险，不会为服务增加鉴权。Router 与 Dashboard 都应保持相同的网络边界。
+
 也可以先构建 dashboard，再安装成用户级工具：
 
 ```bash
@@ -91,7 +97,7 @@ uv run agent-router calls show <call-id> --db calls.db --format json
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-router",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-router",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-router",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "opus-router",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus-router"
   }
 }
 ```
@@ -139,6 +145,8 @@ models = [
 
 `${ENV_VAR}` 会自动从环境变量或 `.env` 文件展开。未设置时不会阻止 `serve` 启动，方便先打开 dashboard 修改配置；包含未解析 key 的 provider 在实际请求路由时会被跳过，全部 provider 都不可用时返回明确错误。支持 `type = "anthropic"`（Anthropic Messages API 兼容 provider）。
 
+当前版本仅实现 `anthropic` 类型。`openai` 协议转换仍在规划中；配置加载和 Dashboard 都不会再接受一个运行时无法调用的 `openai` 类型。
+
 实际模型及价格只在对应 Provider 的 `models` 目录下定义一次。虚拟模型的 `models` 数组只能引用目录中已有的 `{ provider, model }`，数组顺序会在运行时生成从 1 开始的优先级；sticky 模式还必须提供位于该数组中的结构化 `pinned_model`。同一虚拟模型不能重复引用同一个实际模型。
 
 四类价格均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。正常写入的成功调用会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，四类价格快照保持 `NULL`。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
@@ -157,18 +165,22 @@ models = [
 | `GET` | `/api/metrics/by-provider` | 按 provider 分组统计 |
 | `GET` | `/api/metrics/by-real-model` | 按 Provider + 真实模型复合分组统计，返回独立 `provider`、`model` 字段 |
 | `GET` | `/api/metrics/daily?days=30` | 每日调用趋势 |
-| `GET` | `/api/calls?page=1&size=50` | 分页查询调用记录；可用 `provider`、`provider_model` 组合筛选真实模型 |
-| `GET` | `/api/calls/{id}` | 单次调用详情 |
+| `GET` | `/api/calls?page=1&size=50` | 分页查询调用摘要（不含请求/响应正文与故障转移明细）；可用 `provider`、`provider_model` 组合筛选真实模型 |
+| `GET` | `/api/calls/{id}` | 单次调用完整详情（含请求/响应正文与故障转移明细） |
 | `GET` | `/api/config` | 查看配置（api_key 脱敏） |
 | `GET` | `/api/config/providers` | 查看 Provider 及其实际模型目录（api_key 脱敏） |
 | `GET` | `/api/config/models` | 查看虚拟模型的有序引用与结构化 pin |
 | `PUT` | `/api/config` | 校验、原子写入并热重载配置 |
 
+`POST /v1/messages` 只接受顶层为对象的有效 JSON，请求体上限为 50 MiB；`model` 必须是非空字符串，`stream` 若提供则必须是布尔值。超过正文上限返回 `413 invalid_request_error`，畸形 JSON、非对象 JSON 或字段类型错误返回 `400 invalid_request_error`。
+
+Router 会将客户端的 `anthropic-version` 与 `anthropic-beta` 请求头转发给最终 Anthropic-compatible Provider；认证头始终由 Provider 配置生成，不会透传客户端 token。流式客户端中途断开时会立即关闭上游响应并记录 `client_cancelled`，避免长期占用连接和 Provider 并发槽。
+
 `PUT /api/config` 会先完成候选配置校验、TOML 序列化验证和运行时构建，再原子替换文件并切换 Router 与日志配置；任一步失败都会保留或恢复旧文件与旧运行时。删除仍被引用的 Provider 或实际模型会返回 `409` 和 `provider_in_use` / `model_in_use`，并在 `referenced_by` 中列出虚拟模型。必须先单独保存引用移除，再执行删除。
 
 ### 调用记录数据库兼容性
 
-调用记录属于尽力而为的观测数据。请求完成后会先提交到进程内有界队列，再由单个后台 writer 顺序写入 SQLite；API 响应不会等待磁盘提交。队列已满、SQLite 写入失败或服务关闭时未能在超时内排空，会记录 `call_record.dropped`、`call_record.failed`、`call_record.shutdown_timeout` 或 `call_record.cancelled` 日志，但不会把已经成功的模型响应改成失败。worker 的失败/取消日志会保留提交时的 `request_id`，便于关联请求链路。对应调用记录在这些情况下可能缺失，因此 `calls.db` 不应直接作为严格计费或审计账本。
+调用记录属于尽力而为的观测数据。请求完成后会先把请求与非流式响应序列化为最多 256 KiB 的有效 JSON（超限正文替换为包含原始字节数和文本预览的截断信封），再提交到进程内有界队列，由单个后台 writer 顺序写入 SQLite；这既限制慢磁盘期间的队列内存，也不会让 API 响应等待磁盘提交。队列已满、正文序列化失败、SQLite 写入失败或服务关闭时未能在超时内排空，会记录 `call_record.dropped`、`call_record.serialization_failed`、`call_record.failed`、`call_record.shutdown_timeout` 或 `call_record.cancelled` 日志，但不会把已经成功的模型响应改成失败。worker 的失败/取消日志会保留提交时的 `request_id`，便于关联请求链路。对应调用记录在这些情况下可能缺失，因此 `calls.db` 不应直接作为严格计费或审计账本。
 
 本版本的 `calls` 表新增四类价格快照字段，不兼容缺少这些字段的旧 `calls.db`，也不会执行自动迁移。启动时若检测到旧 schema，服务会列出缺失字段并提示手动重建；程序不会删除、覆盖或修改原数据库。请先停止服务并备份或重命名旧文件，例如：
 
@@ -234,9 +246,10 @@ docs/design.md           # 详细设计文档
 路由引擎按 priority 升序遍历 provider，成功即返回。错误分类：
 
 - **可重试**（自动切换下一个 provider）：HTTP 429、529、5xx、连接/超时错误
-- **立即熔断**（故障转移 + 熔断该 provider）：HTTP 401、403（认证/权限错误，不会自动恢复）
-- **连续熔断**（连续达阈值后熔断）：HTTP 429、529、5xx（默认 5 次连续失败）
+- **立即熔断**（故障转移 + 熔断该 provider）：HTTP 401、403；恢复超时后仍会进入半开探测
+- **限流冷却**（按 `Retry-After` 或 Provider 默认值短暂跳过）：HTTP 429、529；不累计熔断失败次数
+- **连续熔断**（连续达阈值后熔断）：HTTP 5xx、连接/超时等瞬态传输错误（默认 5 次连续失败）
 - **不可重试**（立即返回错误）：HTTP 4xx（除 401/403/429）、协议错误、响应非 JSON
 - **全部失败**：返回 502 + 聚合错误信息
 
-熔断的 provider 在恢复超时（默认 60s）后进入半开状态，允许一次探测请求：成功则关闭熔断器，失败则重新熔断。
+熔断的 provider 在恢复超时（默认 600s）后进入半开状态，仅允许一次探测请求：成功则关闭熔断器，失败则重新熔断。

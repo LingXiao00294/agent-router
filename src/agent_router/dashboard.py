@@ -10,7 +10,9 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
+
+from agent_router.responses import ManagedStreamingResponse
 
 DEFAULT_ROUTER_URL = "http://127.0.0.1:9456"
 
@@ -205,7 +207,7 @@ async def _stream_from_router(
         finally:
             await upstream_context.__aexit__(None, None, None)
 
-    return StreamingResponse(
+    return ManagedStreamingResponse(
         body_iterator(),
         status_code=upstream.status_code,
         headers=dict(_filtered_headers(upstream.headers.items(), response=True)),

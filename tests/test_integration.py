@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from typing import cast
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import ClientDisconnect
 
+from agent_router import app as app_module
 from agent_router.app import (
     _calculate_cost_usd,
     _close_prefetched_stream,
@@ -22,9 +26,19 @@ from agent_router.config import (
     VirtualModelConfig,
     parse_config_data,
 )
-from agent_router.db import CallStore
+from agent_router.db import CALL_SUMMARY_COLUMNS, CallStore
 from agent_router.recording import CallRecorder
+from agent_router.responses import ManagedStreamingResponse
 from agent_router.routing import NoProviderAvailableError, Router
+
+
+async def _only_call_detail(store: CallStore) -> dict:
+    """Return the complete detail for the only persisted call in a store."""
+    summaries, total = await store.list_calls()
+    assert total == 1
+    detail = await store.get_call(summaries[0]["id"])
+    assert detail is not None
+    return detail
 
 
 class TestCostCalculation:
@@ -114,17 +128,16 @@ class TestCostCalculation:
             await http_client.aclose()
 
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-        assert total == 1
-        assert calls[0]["input_tokens"] == 100
-        assert calls[0]["output_tokens"] == 25
-        assert calls[0]["cache_read_tokens"] == 200
-        assert calls[0]["cache_write_tokens"] == 50
-        assert calls[0]["input_price_per_million"] == 2.0
-        assert calls[0]["output_price_per_million"] == 8.0
-        assert calls[0]["cache_read_price_per_million"] == 0.2
-        assert calls[0]["cache_write_price_per_million"] == 3.0
-        assert calls[0]["cost_usd"] == pytest.approx(0.00059)
+        call = await _only_call_detail(store)
+        assert call["input_tokens"] == 100
+        assert call["output_tokens"] == 25
+        assert call["cache_read_tokens"] == 200
+        assert call["cache_write_tokens"] == 50
+        assert call["input_price_per_million"] == 2.0
+        assert call["output_price_per_million"] == 8.0
+        assert call["cache_read_price_per_million"] == 0.2
+        assert call["cache_write_price_per_million"] == 3.0
+        assert call["cost_usd"] == pytest.approx(0.00059)
 
     @pytest.mark.parametrize("configured_price", [None, 0.0])
     async def test_non_stream_preserves_missing_and_zero_prices(
@@ -181,16 +194,15 @@ class TestCostCalculation:
 
         assert api_response.status_code == 200
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-        assert total == 1
+        call = await _only_call_detail(store)
         for column in (
             "input_price_per_million",
             "output_price_per_million",
             "cache_read_price_per_million",
             "cache_write_price_per_million",
         ):
-            assert calls[0][column] == configured_price
-        assert calls[0]["cost_usd"] == 0.0
+            assert call[column] == configured_price
+        assert call["cost_usd"] == 0.0
 
     async def test_non_stream_failover_persists_final_provider_prices(
         self, store, recorder
@@ -256,9 +268,7 @@ class TestCostCalculation:
 
         assert response.status_code == 200
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-        assert total == 1
-        call = calls[0]
+        call = await _only_call_detail(store)
         assert call["provider_name"] == "second"
         assert call["provider_model"] == "shared-model"
         assert call["attempt"] == 2
@@ -348,9 +358,7 @@ class TestCostCalculation:
 
         assert b"event: error" not in b"".join(chunks)
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-        assert total == 1
-        call = calls[0]
+        call = await _only_call_detail(store)
         assert call["provider_name"] == "second"
         assert call["provider_model"] == "shared-model"
         assert call["attempt"] == 2
@@ -397,9 +405,7 @@ class TestCostCalculation:
 
         assert response.status_code == 502
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-        assert total == 1
-        call = calls[0]
+        call = await _only_call_detail(store)
         assert call["provider_name"] is None
         assert call["provider_model"] is None
         assert call["input_price_per_million"] is None
@@ -536,6 +542,231 @@ class TestMessages:
         assert resp.status_code == 400
         data = resp.json()
         assert "error" in data
+
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            (b"", "请求体必须是有效的 JSON 对象"),
+            (b'{"model":', "请求体必须是有效的 JSON 对象"),
+            (b"[]", "请求体顶层必须是 JSON 对象"),
+        ],
+    )
+    async def test_rejects_invalid_json_bodies(self, client, content, message):
+        response = await client.post(
+            "/v1/messages",
+            content=content,
+            headers={"content-type": "application/json"},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "error": {"type": "invalid_request_error", "message": message}
+        }
+
+    async def test_rejects_oversized_declared_body(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_MAX_REQUEST_BODY_BYTES", 16)
+
+        response = await client.post(
+            "/v1/messages",
+            content=b"{}",
+            headers={"content-type": "application/json", "content-length": "17"},
+        )
+
+        assert response.status_code == 413
+        assert response.json()["error"]["type"] == "invalid_request_error"
+
+    async def test_rejects_oversized_streamed_body(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_MAX_REQUEST_BODY_BYTES", 16)
+
+        async def chunks():
+            yield b'{"model":"test-'
+            yield b'router","messages":[]}'
+
+        response = await client.post(
+            "/v1/messages",
+            content=chunks(),
+            headers={"content-type": "application/json"},
+        )
+
+        assert response.status_code == 413
+        assert response.json()["error"]["type"] == "invalid_request_error"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"messages": []},
+            {"model": "", "messages": []},
+            {"model": "   ", "messages": []},
+            {"model": {}, "messages": []},
+            {"model": [], "messages": []},
+        ],
+    )
+    async def test_rejects_missing_or_non_string_model(self, client, body):
+        response = await client.post("/v1/messages", json=body)
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "error": {
+                "type": "invalid_request_error",
+                "message": "model 必须是非空字符串",
+            }
+        }
+
+    @pytest.mark.parametrize("stream", [None, 0, 1, "false", [], {}])
+    async def test_rejects_non_boolean_stream(self, client, stream):
+        response = await client.post(
+            "/v1/messages",
+            json={"model": "test-router", "messages": [], "stream": stream},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "error": {
+                "type": "invalid_request_error",
+                "message": "stream 必须是布尔值",
+            }
+        }
+
+    async def test_upstream_client_error_preserves_status(
+        self, app_config, store, recorder
+    ):
+        app_config.router.mode = "failover"
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "max_tokens is required",
+                    }
+                },
+            )
+        )
+
+        async with httpx.AsyncClient(transport=transport) as upstream:
+            app = create_app(app_config, store, call_recorder=recorder)
+            app.state.router_engine = Router(app_config, upstream)
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as api_client:
+                response = await api_client.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-router",
+                        "max_tokens": 10,
+                        "messages": [],
+                    },
+                )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert "max_tokens is required" in response.json()["error"]["message"]
+
+    async def test_forwards_anthropic_feature_headers(
+        self, app_config, store, recorder
+    ):
+        app_config.router.mode = "failover"
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["headers"] = dict(request.headers)
+            seen["body"] = request.read()
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_headers",
+                    "type": "message",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as upstream:
+            app = create_app(app_config, store, call_recorder=recorder)
+            app.state.router_engine = Router(app_config, upstream)
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as api_client:
+                response = await api_client.post(
+                    "/v1/messages",
+                    headers={
+                        "anthropic-version": "2026-07-01",
+                        "anthropic-beta": "context-1m-2025-08-07",
+                    },
+                    json={
+                        "model": "test-router",
+                        "max_tokens": 10,
+                        "messages": [],
+                    },
+                )
+
+        assert response.status_code == 200, response.text
+        await recorder.wait_idle(timeout=1)
+        headers = seen["headers"]
+        upstream_body = seen["body"]
+        assert isinstance(headers, dict)
+        assert isinstance(upstream_body, bytes)
+        typed_headers = cast(dict[str, str], headers)
+        assert typed_headers["anthropic-version"] == "2026-07-01"
+        assert typed_headers["anthropic-beta"] == "context-1m-2025-08-07"
+        assert "_agent_router_anthropic_headers" not in upstream_body.decode()
+        call = await _only_call_detail(store)
+        recorded_body = json.loads(call["request_body"])
+        assert "_agent_router_anthropic_headers" not in recorded_body
+
+    async def test_disconnect_closes_stream_and_records_cancellation(
+        self, store, recorder
+    ):
+        source_closed = asyncio.Event()
+
+        async def source():
+            try:
+                yield (
+                    b"event: message_start\n"
+                    b'data: {"message":{"usage":{"input_tokens":7}}}\n\n'
+                )
+                await asyncio.Event().wait()
+            finally:
+                source_closed.set()
+
+        wrapped = _stream_wrapper(
+            source(),
+            outcome={
+                "provider_name": "provider",
+                "provider_type": "anthropic",
+                "provider_model": "model",
+                "provider_url": "https://provider.test",
+                "attempt": 1,
+            },
+            recorder=recorder,
+            virtual_model="test-router",
+            request_body={"model": "test-router", "stream": True},
+            start_time=0,
+            request_id="req-client-disconnect",
+        )
+        response = ManagedStreamingResponse(wrapped, media_type="text/event-stream")
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body":
+                raise OSError("client disconnected")
+
+        with pytest.raises(ClientDisconnect):
+            await response(
+                {"type": "http", "asgi": {"spec_version": "2.4"}},
+                receive,
+                send,
+            )
+
+        await recorder.wait_idle(timeout=1)
+        assert source_closed.is_set()
+        call = await _only_call_detail(store)
+        assert call["status"] == "error"
+        assert call["error_type"] == "client_cancelled"
+        assert call["input_tokens"] == 7
+        assert call["provider_name"] == "provider"
 
     @pytest.mark.asyncio
     async def test_non_stream_request(self, client):
@@ -681,7 +912,13 @@ class TestMessages:
             chunk
             async for chunk in _stream_wrapper(
                 rate_limited_stream(),
-                outcome={},
+                outcome={
+                    "provider_name": "anthropic",
+                    "provider_type": "anthropic",
+                    "provider_model": "real-model",
+                    "provider_url": "https://provider.test",
+                    "attempt": 1,
+                },
                 recorder=recorder,
                 virtual_model="test-router",
                 request_body={"model": "test-router", "stream": True},
@@ -690,10 +927,10 @@ class TestMessages:
             )
         ]
         await recorder.wait_idle(timeout=1)
-        calls, total = await store.list_calls()
-
-        assert total == 1
-        assert calls[0]["error_type"] == "rate_limit_error"
+        call = await _only_call_detail(store)
+        assert call["error_type"] == "rate_limit_error"
+        assert call["provider_name"] == "anthropic"
+        assert call["provider_model"] == "real-model"
         assert b'"type": "rate_limit_error"' in b"".join(chunks)
 
     @pytest.mark.asyncio
@@ -875,6 +1112,44 @@ class TestRecordCall:
         calls, total = await store.list_calls(page=1, size=3)
         assert len(calls) == 3
         assert total == 5
+
+    async def test_calls_api_separates_summaries_from_complete_details(
+        self, store, client
+    ):
+        call_id = await store.record(
+            virtual_model="test-router",
+            status="success",
+            provider_name="provider",
+            provider_type="anthropic",
+            provider_model="model",
+            provider_url="https://provider.test",
+            request_body={"messages": [{"content": "private prompt"}]},
+            response_body={"content": [{"text": "private reply"}]},
+            failover_details=[
+                {"provider": "first", "model": "model", "error": "failed"}
+            ],
+            input_price_per_million=1.0,
+        )
+
+        list_response = await client.get("/api/calls")
+        detail_response = await client.get(f"/api/calls/{call_id}")
+
+        assert list_response.status_code == 200
+        payload = list_response.json()
+        assert payload["total"] == 1
+        assert set(payload["data"][0]) == set(CALL_SUMMARY_COLUMNS)
+        assert set(payload["data"][0]).isdisjoint(
+            {"request_body", "response_body", "failover_details"}
+        )
+        assert payload["data"][0]["id"] == call_id
+
+        assert detail_response.status_code == 200
+        detail = detail_response.json()
+        assert "private prompt" in detail["request_body"]
+        assert "private reply" in detail["response_body"]
+        assert "first" in detail["failover_details"]
+        assert detail["provider_url"] == "https://provider.test"
+        assert detail["input_price_per_million"] == 1.0
 
     @pytest.mark.asyncio
     async def test_list_calls_status_filter(self, store):

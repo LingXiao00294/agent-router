@@ -8,12 +8,12 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from structlog.contextvars import bind_contextvars, get_contextvars, unbind_contextvars
 
 from agent_router.api.config import RuntimeReloadError, create_config_router
@@ -21,7 +21,10 @@ from agent_router.api.metrics import create_metrics_router
 from agent_router.config import AppConfig
 from agent_router.db import CallStore
 from agent_router.monitoring import reconfigure_logging
+from agent_router.providers.anthropic_compat import FORWARDED_ANTHROPIC_HEADERS_KEY
+from agent_router.providers.base import NonRetryableError
 from agent_router.recording import CallRecorder
+from agent_router.responses import ManagedStreamingResponse
 from agent_router.routing import (
     AllProvidersFailedError,
     NoProviderAvailableError,
@@ -96,6 +99,15 @@ _STREAM_FIRST_BYTE_PREFETCH_TIMEOUT = 5.0
 # 避免客户端注入超长/特殊字符污染日志与响应头。
 _REQUEST_ID_MAX_LEN = 128
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+# 与设计文档公开契约一致；流式读取会在超过上限的首个 chunk 立即停止，
+# 避免超大正文先完整进入内存、上游调用和持久化队列。
+_MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
+_FORWARDED_ANTHROPIC_HEADERS = ("anthropic-version", "anthropic-beta")
+
+
+class RequestBodyTooLarge(ValueError):
+    """Raised when an inbound Messages request exceeds the configured limit."""
 
 
 def _sanitize_request_id(raw: str | None) -> str:
@@ -247,10 +259,18 @@ def create_app(
 
     @app.post("/v1/messages")
     async def messages(request: Request):
-        body = await request.json()
-        virtual_model = body.get("model", "unknown")
-        is_stream = body.get("stream", False)
         start_time = time.time()
+        try:
+            body = await _read_message_body(request)
+            _validate_message_fields(body)
+        except RequestBodyTooLarge as exc:
+            return _anthropic_error_response(str(exc), status_code=413)
+        except ValueError as exc:
+            return _anthropic_error_response(str(exc), status_code=400)
+
+        virtual_model = cast(str, body["model"])
+        is_stream = body.get("stream", False) is True
+        upstream_body = _with_forwarded_anthropic_headers(body, request.headers)
         # 中间件已绑定 request_id；此处显式取出，供流式场景在中间件清理上下文后
         # 仍能把同一 request_id 贯穿到 routing 层日志：StreamingResponse 的 body 在
         # 中间件返回后才被 ASGI 消费，此时中间件已 unbind request_id，
@@ -264,7 +284,7 @@ def create_app(
                 # 有界预取首个 chunk：快速失败可转 HTTP 429/503/502；
                 # 超时则先返回 SSE 头，继续在响应体中等待首字节。
                 stream_agen: AsyncGenerator[bytes, None] = engine.route_stream(
-                    body, outcome
+                    upstream_body, outcome
                 )
                 try:
                     first_chunk, pending_first = await _prefetch_first_chunk(
@@ -301,7 +321,7 @@ def create_app(
                     finally:
                         await _close_prefetched_stream(stream_agen, pending_first)
 
-                return StreamingResponse(
+                return ManagedStreamingResponse(
                     _stream_wrapper(
                         _prepended(),
                         outcome=outcome,
@@ -320,7 +340,7 @@ def create_app(
                 )
             else:
                 outcome: dict = {}
-                result = await engine.route_non_stream(body, outcome)
+                result = await engine.route_non_stream(upstream_body, outcome)
                 latency_ms = int((time.time() - start_time) * 1000)
                 usage = result.get("usage", {})
                 recorder.submit(
@@ -372,6 +392,30 @@ def create_app(
         except AllProvidersFailedError as e:
             return await _all_failed_response(
                 e, recorder, virtual_model, body, start_time
+            )
+
+        except NonRetryableError as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            status_code = e.status_code or 502
+            error_type = "invalid_request_error" if status_code < 500 else "api_error"
+            recorder.submit(
+                virtual_model=virtual_model,
+                status="error",
+                error_type=error_type,
+                error_message=str(e),
+                latency_ms=latency_ms,
+                request_body=body,
+            )
+            logger.warning(
+                "request.non_retryable_error",
+                model=virtual_model,
+                status_code=status_code,
+                error=str(e),
+            )
+            return _anthropic_error_response(
+                str(e),
+                status_code=status_code,
+                error_type=error_type,
             )
 
         except Exception as e:
@@ -438,6 +482,95 @@ def create_app(
     return app
 
 
+async def _read_message_body(request: Request) -> dict[str, Any]:
+    """Read and validate one bounded JSON object from a Messages request.
+
+    Args:
+        request: Incoming FastAPI request whose body has not been consumed.
+
+    Returns:
+        The decoded top-level JSON object.
+
+    Raises:
+        RequestBodyTooLarge: If Content-Length or streamed bytes exceed 50 MiB.
+        ValueError: If the body is empty, malformed JSON, or not an object.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = 0
+        if declared_length > _MAX_REQUEST_BODY_BYTES:
+            raise RequestBodyTooLarge(
+                f"请求体超过 {_MAX_REQUEST_BODY_BYTES // (1024 * 1024)} MiB 上限"
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _MAX_REQUEST_BODY_BYTES:
+            raise RequestBodyTooLarge(
+                f"请求体超过 {_MAX_REQUEST_BODY_BYTES // (1024 * 1024)} MiB 上限"
+            )
+        body.extend(chunk)
+
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("请求体必须是有效的 JSON 对象") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("请求体顶层必须是 JSON 对象")
+    return payload
+
+
+def _with_forwarded_anthropic_headers(
+    body: dict[str, Any], headers: Mapping[str, str]
+) -> dict[str, Any]:
+    """Attach selected Anthropic headers as trusted provider-only metadata.
+
+    The returned copy is used only for routing. The original body remains free
+    of internal metadata for call recording, and a client-supplied key matching
+    the private metadata field cannot forge additional upstream headers.
+    """
+    upstream_body = {**body}
+    upstream_body.pop(FORWARDED_ANTHROPIC_HEADERS_KEY, None)
+    forwarded = {
+        name: value
+        for name in _FORWARDED_ANTHROPIC_HEADERS
+        if (value := headers.get(name))
+    }
+    if forwarded:
+        upstream_body[FORWARDED_ANTHROPIC_HEADERS_KEY] = forwarded
+    return upstream_body
+
+
+def _validate_message_fields(body: Mapping[str, Any]) -> None:
+    """Validate routing-critical Messages fields before dictionary lookup.
+
+    Raises:
+        ValueError: If ``model`` is absent or not a non-empty string, or if a
+            supplied ``stream`` value is not a JSON boolean.
+    """
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model 必须是非空字符串")
+    if "stream" in body and not isinstance(body["stream"], bool):
+        raise ValueError("stream 必须是布尔值")
+
+
+def _anthropic_error_response(
+    message: str,
+    *,
+    status_code: int,
+    error_type: str = "invalid_request_error",
+) -> JSONResponse:
+    """Build an Anthropic-compatible JSON error response."""
+    return JSONResponse(
+        {"error": {"type": error_type, "message": message}},
+        status_code=status_code,
+    )
+
+
 async def _prefetch_first_chunk(
     stream_agen: AsyncGenerator[bytes, None],
     *,
@@ -469,8 +602,9 @@ async def _close_prefetched_stream(
     pending_first: asyncio.Task[bytes] | None,
 ) -> None:
     """安全关闭预取流：先等 pending task 结束，再 aclose，避免竞态 RuntimeError."""
-    if pending_first is not None and not pending_first.done():
-        pending_first.cancel()
+    if pending_first is not None:
+        if not pending_first.done():
+            pending_first.cancel()
         try:
             await pending_first
         except (asyncio.CancelledError, StopAsyncIteration, Exception):
@@ -569,12 +703,12 @@ async def _stream_wrapper(
     usage: dict = {}
     got_msg_start = False
     got_msg_delta = False
+    recorded = False
 
     if request_id is not None:
         bind_contextvars(request_id=request_id)
     try:
         async for chunk in stream:
-            yield chunk
             buffer += chunk
             # 限制 buffer 大小，只保留最近 32KB
             if len(buffer) > 32768:
@@ -600,6 +734,10 @@ async def _stream_wrapper(
                     except (json.JSONDecodeError, TypeError):
                         pass
 
+            # 先更新 usage 再交付 chunk；若客户端在发送期间断开，取消记录仍能
+            # 保留这个已从上游收到的 chunk 中的 token 信息。
+            yield chunk
+
         # 流成功完成
         latency_ms = int((time.time() - start_time) * 1000)
         recorder.submit(
@@ -620,6 +758,7 @@ async def _stream_wrapper(
             cost_usd=_calculate_cost_usd(usage, outcome),
             failover_details=outcome.get("_failures"),
         )
+        recorded = True
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         failover = None
@@ -636,12 +775,24 @@ async def _stream_wrapper(
         recorder.submit(
             virtual_model=virtual_model,
             status="error",
+            provider_name=outcome.get("provider_name"),
+            provider_type=outcome.get("provider_type"),
+            provider_model=outcome.get("provider_model"),
+            provider_url=outcome.get("provider_url"),
+            attempt=outcome.get("attempt", 1),
             error_type=record_error_type,
             error_message=str(e),
             latency_ms=latency_ms,
             request_body=request_body,
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            cache_read_tokens=usage.get("cache_read_input_tokens"),
+            cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            **_price_snapshot_kwargs(outcome),
+            cost_usd=_calculate_cost_usd(usage, outcome),
             failover_details=failover,
         )
+        recorded = True
         err_type = _stream_error_type(e)
         error_body = json.dumps(
             {
@@ -654,6 +805,38 @@ async def _stream_wrapper(
         )
         yield f"event: error\ndata: {error_body}\n\n".encode()
     finally:
-        # 解绑本 wrapper 绑定的 request_id，保持上下文对称清理。
-        if request_id is not None:
-            unbind_contextvars("request_id")
+        if not recorded:
+            latency_ms = int((time.time() - start_time) * 1000)
+            recorder.submit(
+                virtual_model=virtual_model,
+                status="error",
+                provider_name=outcome.get("provider_name"),
+                provider_type=outcome.get("provider_type"),
+                provider_model=outcome.get("provider_model"),
+                provider_url=outcome.get("provider_url"),
+                attempt=outcome.get("attempt", 1),
+                error_type="client_cancelled",
+                error_message="客户端在流完成前断开连接",
+                latency_ms=latency_ms,
+                request_body=request_body,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                cache_read_tokens=usage.get("cache_read_input_tokens"),
+                cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                **_price_snapshot_kwargs(outcome),
+                cost_usd=_calculate_cost_usd(usage, outcome),
+                failover_details=outcome.get("_failures"),
+            )
+        try:
+            # 主动关闭内层 generator，确保客户端取消时及时释放上游连接与 gate slot。
+            await stream.aclose()
+        except Exception:
+            logger.warning(
+                "stream.close_failed",
+                model=virtual_model,
+                exc_info=True,
+            )
+        finally:
+            # 解绑本 wrapper 绑定的 request_id，保持上下文对称清理。
+            if request_id is not None:
+                unbind_contextvars("request_id")

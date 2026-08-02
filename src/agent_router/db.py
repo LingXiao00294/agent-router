@@ -11,6 +11,8 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+MAX_PERSISTED_BODY_BYTES = 256 * 1024
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calls (
     id              TEXT PRIMARY KEY,
@@ -76,6 +78,23 @@ CALL_SCHEMA_COLUMNS = frozenset(
     }
 )
 
+CALL_SUMMARY_COLUMNS = (
+    "id",
+    "timestamp",
+    "virtual_model",
+    "provider_name",
+    "provider_model",
+    "attempt",
+    "latency_ms",
+    "status",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cost_usd",
+)
+_CALL_SUMMARY_SELECT = ", ".join(CALL_SUMMARY_COLUMNS)
+
 
 class CallRecordPayload(TypedDict, total=False):
     """Keyword fields required to persist one completed API call."""
@@ -88,10 +107,11 @@ class CallRecordPayload(TypedDict, total=False):
     provider_url: str | None
     attempt: int
     latency_ms: int | None
-    request_body: dict | None
+    request_body: dict | str | None
+    request_tokens: int | None
     error_type: str | None
     error_message: str | None
-    response_body: dict | None
+    response_body: dict | str | None
     input_tokens: int | None
     output_tokens: int | None
     cache_read_tokens: int | None
@@ -190,13 +210,11 @@ class CallStore:
         request_body = record.get("request_body")
         response_body = record.get("response_body")
         failover_details = record.get("failover_details")
-        request_tokens = _estimate_request_tokens(request_body)
-        resp_json = (
-            json.dumps(response_body, ensure_ascii=False) if response_body else None
-        )
-        req_json = (
-            json.dumps(request_body, ensure_ascii=False) if request_body else None
-        )
+        request_tokens = record.get("request_tokens")
+        if request_tokens is None and isinstance(request_body, dict):
+            request_tokens = _estimate_request_tokens(request_body)
+        resp_json = _serialize_call_body(response_body)
+        req_json = _serialize_call_body(request_body)
         fo_json = (
             json.dumps(failover_details, ensure_ascii=False)
             if failover_details
@@ -249,6 +267,7 @@ class CallStore:
         return call_id
 
     async def get_call(self, call_id: str) -> dict | None:
+        """Return the complete persisted detail for one call."""
         async with self.conn.execute(
             "SELECT * FROM calls WHERE id = ?", (call_id,)
         ) as cursor:
@@ -264,6 +283,11 @@ class CallStore:
         provider: str | None = None,
         provider_model: str | None = None,
     ) -> tuple[list[dict], int]:
+        """Return lightweight call summaries and the matching total count.
+
+        Request and response bodies, failover details, provider URLs, and price
+        snapshots remain available only through :meth:`get_call`.
+        """
         conditions: list[str] = []
         params: list[Any] = []
         if model:
@@ -289,7 +313,8 @@ class CallStore:
 
         offset = (page - 1) * size
         rows = await conn.execute_fetchall(
-            f"SELECT * FROM calls {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            f"SELECT {_CALL_SUMMARY_SELECT} FROM calls {where} "
+            "ORDER BY timestamp DESC LIMIT ? OFFSET ?",
             [*params, size, offset],
         )
         return [dict(r) for r in rows], total
@@ -415,3 +440,48 @@ def _estimate_request_tokens(body: dict | None) -> int | None:
                 total_chars += len(s.get("text", ""))
     # 粗略估算: 英文 ~4 chars/token, 中文 ~1.5 chars/token
     return max(1, int(total_chars / 3))
+
+
+def _serialize_call_body(body: dict | str | None) -> str | None:
+    """Serialize a call body to a bounded, valid JSON representation.
+
+    Bodies larger than :data:`MAX_PERSISTED_BODY_BYTES` are replaced by a JSON
+    envelope containing their original UTF-8 size and a textual prefix. Prefix
+    length is selected against the final encoded envelope, accounting for JSON
+    escaping and multi-byte characters without relying on an expansion ratio.
+    """
+    if not body:
+        return None
+    if isinstance(body, str):
+        try:
+            json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            serialized = json.dumps(body, ensure_ascii=False)
+        else:
+            serialized = body
+    else:
+        serialized = json.dumps(body, ensure_ascii=False)
+    encoded = serialized.encode("utf-8")
+    if len(encoded) <= MAX_PERSISTED_BODY_BYTES:
+        return serialized
+
+    envelope: dict[str, Any] = {
+        "_truncated": True,
+        "_original_bytes": len(encoded),
+        "_preview": "",
+    }
+    best = json.dumps(envelope, ensure_ascii=False)
+    low = 0
+    # No prefix longer than the byte limit can fit, while bounding this search
+    # also avoids repeatedly copying a complete 50 MiB source string.
+    high = min(len(serialized), MAX_PERSISTED_BODY_BYTES)
+    while low <= high:
+        midpoint = (low + high) // 2
+        envelope["_preview"] = serialized[:midpoint]
+        candidate = json.dumps(envelope, ensure_ascii=False)
+        if len(candidate.encode("utf-8")) <= MAX_PERSISTED_BODY_BYTES:
+            best = candidate
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+    return best

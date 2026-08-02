@@ -10,7 +10,7 @@ from typing import Literal
 import structlog
 from structlog.contextvars import get_contextvars
 
-from agent_router.circuit_breaker import CircuitBreaker
+from agent_router.circuit_breaker import CircuitBreaker, CircuitPermit, CircuitState
 from agent_router.config import (
     AppConfig,
     ProviderConfig,
@@ -91,11 +91,7 @@ def _check_stream_error(buffer: bytes) -> None:
 
 
 def _create_provider(config: ProviderConfig, http_client) -> BaseProvider:
-    if config.type == "anthropic":
-        return AnthropicCompatProvider(config, http_client)
-    if config.type == "openai":
-        raise NotImplementedError("OpenAI provider 尚未实现")
-    raise ValueError(f"未知 provider 类型: {config.type}")
+    return AnthropicCompatProvider(config, http_client)
 
 
 def _max_retry_after(errors: list[dict]) -> float | None:
@@ -145,6 +141,7 @@ class Router:
         providers: list[ProviderConfig],
         i: int,
         *,
+        permit: CircuitPermit | None,
         allow_failover: bool,
     ) -> None:
         """Shared error handling for both route methods.
@@ -169,6 +166,7 @@ class Router:
                 provider_cfg.name,
                 immediate=e.immediate_break,
                 failure_threshold=provider_cfg.failure_threshold,
+                permit=permit,
             )
 
         err_entry: dict = {
@@ -301,6 +299,69 @@ class Router:
                 reason=kind,
             )
 
+    async def _record_circuit_skip(
+        self,
+        provider_cfg: ProviderConfig,
+        request_id: str,
+        p_start: float,
+        errors: list[dict],
+        outcome: dict | None,
+        providers: list[ProviderConfig],
+        i: int,
+        *,
+        allow_failover: bool,
+    ) -> None:
+        """Record a provider skipped because no circuit permit was available."""
+        state = await self.circuit_breaker.state(
+            provider_cfg.name,
+            recovery_timeout=provider_cfg.recovery_timeout,
+        )
+        p_latency = (time.time() - p_start) * 1000
+        message = (
+            f"provider 熔断暂不可用 (state={state.value}, HALF_OPEN probe 可能正在执行)"
+        )
+        entry = {
+            "provider": provider_cfg.name,
+            "model": provider_cfg.model,
+            "priority": provider_cfg.priority,
+            "error": message,
+            "retryable": True,
+            "reason": "circuit_unavailable",
+            "latency_ms": round(p_latency),
+        }
+        errors.append(entry)
+
+        if outcome is not None:
+            outcome.setdefault("_failures", []).append(
+                {
+                    "provider": provider_cfg.name,
+                    "model": provider_cfg.model,
+                    "error": message,
+                    "latency_ms": round(p_latency),
+                }
+            )
+
+        logger.info(
+            "provider.circuit_skip",
+            request_id=request_id,
+            provider=provider_cfg.name,
+            model=provider_cfg.model,
+            state=state.value,
+        )
+
+        next_idx = i + 1
+        if allow_failover and next_idx < len(providers):
+            next_cfg = providers[next_idx]
+            logger.info(
+                "failover",
+                request_id=request_id,
+                from_provider=provider_cfg.name,
+                from_model=provider_cfg.model,
+                to_provider=next_cfg.name,
+                to_model=next_cfg.model,
+                reason="circuit_unavailable",
+            )
+
     async def route_non_stream(
         self, request_body: dict, outcome: dict | None = None
     ) -> dict:
@@ -329,24 +390,45 @@ class Router:
         for i, provider_cfg in enumerate(providers):
             attempt = i + 1
             p_start = time.time()
-
-            logger.info(
-                "provider.try",
-                request_id=request_id,
-                provider=provider_cfg.name,
-                model=provider_cfg.model,
-                priority=provider_cfg.priority,
-                attempt=attempt,
-            )
+            permit: CircuitPermit | None = None
 
             try:
                 async with self.provider_gate.slot(provider_cfg):
+                    permit = await self.circuit_breaker.try_acquire(
+                        provider_cfg.name,
+                        recovery_timeout=provider_cfg.recovery_timeout,
+                    )
+                    if permit is None:
+                        await self._record_circuit_skip(
+                            provider_cfg,
+                            request_id,
+                            p_start,
+                            errors,
+                            outcome,
+                            providers,
+                            i,
+                            allow_failover=allow_failover,
+                        )
+                        continue
+
+                    logger.info(
+                        "provider.try",
+                        request_id=request_id,
+                        provider=provider_cfg.name,
+                        model=provider_cfg.model,
+                        priority=provider_cfg.priority,
+                        attempt=attempt,
+                        circuit_probe=permit.probe,
+                    )
                     provider = _create_provider(provider_cfg, self.http)
                     result = await provider.send(request_body)
                     p_latency = (time.time() - p_start) * 1000
                     total_latency = (time.time() - start_time) * 1000
 
-                    await self.circuit_breaker.record_success(provider_cfg.name)
+                    await self.circuit_breaker.record_success(
+                        provider_cfg.name,
+                        permit=permit,
+                    )
 
                     logger.info(
                         "provider.success",
@@ -397,6 +479,7 @@ class Router:
                         outcome,
                         providers,
                         i,
+                        permit=permit,
                         allow_failover=allow_failover,
                     )
                 except StickyRateLimited as srl:
@@ -406,6 +489,9 @@ class Router:
                         kind="rate_limit",
                         retry_after=srl.retry_after,
                     ) from e
+            finally:
+                if permit is not None:
+                    await self.circuit_breaker.release(permit)
 
         raise self._exhausted(virtual_model, errors, start_time, len(providers))
 
@@ -440,19 +526,51 @@ class Router:
         for i, provider_cfg in enumerate(providers):
             attempt = i + 1
             p_start = time.time()
-
-            logger.info(
-                "provider.try",
-                request_id=request_id,
-                provider=provider_cfg.name,
-                model=provider_cfg.model,
-                priority=provider_cfg.priority,
-                attempt=attempt,
-            )
+            permit: CircuitPermit | None = None
 
             try:
                 async with self.provider_gate.slot(provider_cfg):
+                    permit = await self.circuit_breaker.try_acquire(
+                        provider_cfg.name,
+                        recovery_timeout=provider_cfg.recovery_timeout,
+                    )
+                    if permit is None:
+                        await self._record_circuit_skip(
+                            provider_cfg,
+                            request_id,
+                            p_start,
+                            errors,
+                            outcome,
+                            providers,
+                            i,
+                            allow_failover=allow_failover,
+                        )
+                        continue
+
+                    logger.info(
+                        "provider.try",
+                        request_id=request_id,
+                        provider=provider_cfg.name,
+                        model=provider_cfg.model,
+                        priority=provider_cfg.priority,
+                        attempt=attempt,
+                        circuit_probe=permit.probe,
+                    )
                     provider = _create_provider(provider_cfg, self.http)
+                    # 流可能在自然结束前因客户端断开而被关闭；候选一旦真正开始
+                    # 调用就先暴露元数据，使取消记录仍能归因到实际 Provider。
+                    if outcome is not None:
+                        outcome["provider_type"] = provider_cfg.type
+                        outcome["provider_name"] = provider_cfg.name
+                        outcome["provider_model"] = provider_cfg.model
+                        outcome["provider_url"] = provider_cfg.base_url
+                        outcome["attempt"] = attempt
+                        outcome["pricing"] = {
+                            "input": provider_cfg.input_price_per_million,
+                            "output": provider_cfg.output_price_per_million,
+                            "cache_read": provider_cfg.cache_read_price_per_million,
+                            "cache_write": provider_cfg.cache_write_price_per_million,
+                        }
                     error_buffer = b""
                     async for chunk in provider.send_stream(request_body):
                         error_buffer += chunk
@@ -466,7 +584,10 @@ class Router:
                     p_latency = (time.time() - p_start) * 1000
                     total_latency = (time.time() - start_time) * 1000
 
-                    await self.circuit_breaker.record_success(provider_cfg.name)
+                    await self.circuit_breaker.record_success(
+                        provider_cfg.name,
+                        permit=permit,
+                    )
 
                     logger.info(
                         "provider.success",
@@ -477,19 +598,6 @@ class Router:
                         provider_latency_ms=round(p_latency),
                         total_latency_ms=round(total_latency),
                     )
-
-                    if outcome is not None:
-                        outcome["provider_type"] = provider_cfg.type
-                        outcome["provider_name"] = provider_cfg.name
-                        outcome["provider_model"] = provider_cfg.model
-                        outcome["provider_url"] = provider_cfg.base_url
-                        outcome["attempt"] = attempt
-                        outcome["pricing"] = {
-                            "input": provider_cfg.input_price_per_million,
-                            "output": provider_cfg.output_price_per_million,
-                            "cache_read": provider_cfg.cache_read_price_per_million,
-                            "cache_write": provider_cfg.cache_write_price_per_million,
-                        }
 
                     return
 
@@ -521,6 +629,7 @@ class Router:
                         outcome,
                         providers,
                         i,
+                        permit=permit,
                         allow_failover=can_failover,
                     )
                 except StickyRateLimited as srl:
@@ -533,6 +642,9 @@ class Router:
                 if client_started:
                     # 已向客户端发送数据后不再 failover；可重试错误也直接抛出
                     raise
+            finally:
+                if permit is not None:
+                    await self.circuit_breaker.release(permit)
 
         raise self._exhausted(virtual_model, errors, start_time, len(providers))
 
@@ -624,18 +736,16 @@ class Router:
                 )
                 continue
 
-            if not await self.circuit_breaker.is_available(
-                p.name, recovery_timeout=p.recovery_timeout
-            ):
+            circuit_state = await self.circuit_breaker.state(
+                p.name,
+                recovery_timeout=p.recovery_timeout,
+            )
+            if circuit_state == CircuitState.OPEN:
                 skipped.append(
                     {
                         "provider": p.name,
                         "model": p.model,
-                        "state": (
-                            await self.circuit_breaker.state(
-                                p.name, recovery_timeout=p.recovery_timeout
-                            )
-                        ).value,
+                        "state": circuit_state.value,
                         "retryable": True,
                         "reason": "circuit_open",
                     }

@@ -9,7 +9,16 @@ from agent_router.config import ProviderConfig
 
 
 class NonRetryableError(Exception):
-    """不可重试的错误 (4xx 客户端错误、协议错误等)."""
+    """Represent an upstream error that failover cannot safely retry.
+
+    ``status_code`` is preserved only when the upstream response is a client
+    error that can be returned to the caller. Protocol and decoding errors
+    leave it unset and remain gateway failures.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class RetryableError(Exception):
