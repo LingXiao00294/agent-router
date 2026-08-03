@@ -20,6 +20,7 @@ const refresh = useRefreshStore();
 const route = useRoute();
 const router = useRouter();
 const { tick } = storeToRefs(refresh);
+let silentRefreshSeq = 0;
 
 async function bootstrap() {
   app.initTheme();
@@ -31,6 +32,7 @@ async function bootstrap() {
 }
 
 async function silentRefresh() {
+  const seq = ++silentRefreshSeq;
   let failed = false;
   try {
     await Promise.all([app.checkHealth(), app.loadCircuit(true)]);
@@ -39,6 +41,7 @@ async function silentRefresh() {
   }
   if (app.healthy === false) failed = true;
   if (await refresh.runHandlers()) failed = true;
+  if (seq !== silentRefreshSeq) return;
 
   if (failed) {
     if (!app.staleData) {

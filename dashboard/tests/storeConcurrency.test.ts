@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createPinia, setActivePinia } from "pinia";
 import type { AppConfig, CallsPage, Summary } from "../src/api/types";
 import { useCallsStore } from "../src/stores/calls";
+import { useAppStore } from "../src/stores/app";
 import { useConfigStore } from "../src/stores/config";
 import { useMetricsStore } from "../src/stores/metrics";
 
@@ -135,6 +136,38 @@ afterEach(() => {
 });
 
 describe("request generations", () => {
+  test("app stores keep the newest global health, config, and circuit results", async () => {
+    const health = [deferred<Response>(), deferred<Response>()];
+    const configs = [deferred<Response>(), deferred<Response>()];
+    const circuits = [deferred<Response>(), deferred<Response>()];
+    const indexes = { health: 0, config: 0, circuit: 0 };
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/health") return health[indexes.health++].promise;
+      if (path === "/api/config") return configs[indexes.config++].promise;
+      if (path === "/api/circuit-breaker") return circuits[indexes.circuit++].promise;
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useAppStore();
+
+    const first = [store.checkHealth(), store.loadConfig(), store.loadCircuit()];
+    const second = [store.checkHealth(), store.loadConfig(), store.loadCircuit()];
+    health[1].resolve(jsonResponse({ status: "ok" }));
+    configs[1].resolve(jsonResponse(validConfig("newest")));
+    circuits[1].resolve(jsonResponse({ provider: "open" }));
+    await Promise.all(second);
+
+    health[0].resolve(jsonResponse({ status: "down" }));
+    configs[0].resolve(jsonResponse(validConfig("stale")));
+    circuits[0].resolve(jsonResponse({ provider: "closed" }));
+    await Promise.all(first);
+
+    expect(store.healthy).toBe(true);
+    expect(store.config?.server.host).toBe("newest");
+    expect(store.circuit).toEqual({ provider: "open" });
+    expect(store.configLoading).toBe(false);
+  });
+
   test("calls keeps the newest page when responses and errors finish in reverse order", async () => {
     const requests = [deferred<Response>(), deferred<Response>(), deferred<Response>()];
     let requestIndex = 0;

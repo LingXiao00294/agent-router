@@ -18,6 +18,9 @@ export const useAppStore = defineStore("app", () => {
   const circuit = ref<CircuitBreakerMap>({});
   const savingMode = ref(false);
   const staleData = ref(false);
+  let healthSeq = 0;
+  let configSeq = 0;
+  let circuitSeq = 0;
 
   const mode = computed(() => config.value?.router.mode ?? "sticky");
 
@@ -35,33 +38,44 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function checkHealth() {
+    const seq = ++healthSeq;
     try {
       const res = await api.getHealth();
+      if (seq !== healthSeq) return;
       healthy.value = res.status === "ok";
       healthError.value = null;
     } catch (err) {
+      if (seq !== healthSeq) return;
       healthy.value = false;
       healthError.value = err instanceof Error ? err.message : "unreachable";
     }
   }
 
   async function loadConfig(silent = false) {
+    const seq = ++configSeq;
     if (!silent) configLoading.value = true;
     configError.value = null;
     try {
-      config.value = normalizeAppConfig(await api.getConfig());
+      const result = normalizeAppConfig(await api.getConfig());
+      if (seq !== configSeq) return;
+      config.value = result;
     } catch (err) {
+      if (seq !== configSeq) return;
       configError.value = err instanceof Error ? err.message : "加载配置失败";
       if (!silent) throw err;
     } finally {
-      configLoading.value = false;
+      if (seq === configSeq) configLoading.value = false;
     }
   }
 
   async function loadCircuit(silent = false) {
+    const seq = ++circuitSeq;
     try {
-      circuit.value = await api.getCircuitBreaker();
+      const result = await api.getCircuitBreaker();
+      if (seq !== circuitSeq) return;
+      circuit.value = result;
     } catch (err) {
+      if (seq !== circuitSeq) return;
       if (!silent) throw err;
     }
   }
