@@ -139,6 +139,47 @@ class TestCostCalculation:
         assert call["cache_write_price_per_million"] == 3.0
         assert call["cost_usd"] == pytest.approx(0.00059)
 
+    async def test_stream_usage_survives_long_and_multiline_sse_events(
+        self, store, recorder
+    ):
+        """Record usage when large SSE events span chunks and data lines."""
+        start_payload = json.dumps(
+            {
+                "message": {
+                    "padding": "x" * 40_000,
+                    "usage": {"input_tokens": 321, "cache_read_input_tokens": 45},
+                }
+            }
+        ).encode()
+        sse = (
+            b"event: message_start\n"
+            b"data: " + start_payload + b"\n\n"
+            b"event: message_delta\n"
+            b'data: {"usage":\n'
+            b'data: {"output_tokens": 17}}\n\n'
+        )
+
+        async def source():
+            yield sse[:20_000]
+            yield sse[20_000:]
+
+        async for _ in _stream_wrapper(
+            source(),
+            outcome={"attempt": 1},
+            recorder=recorder,
+            virtual_model="long-usage",
+            request_body={"model": "long-usage", "stream": True},
+            start_time=0.0,
+            request_id="long-usage-test",
+        ):
+            pass
+
+        await recorder.wait_idle(timeout=1)
+        call = await _only_call_detail(store)
+        assert call["input_tokens"] == 321
+        assert call["output_tokens"] == 17
+        assert call["cache_read_tokens"] == 45
+
     @pytest.mark.parametrize("configured_price", [None, 0.0])
     async def test_non_stream_preserves_missing_and_zero_prices(
         self, store, recorder, configured_price

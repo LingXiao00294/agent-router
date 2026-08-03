@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -24,13 +23,9 @@ from agent_router.provider_gate import (
 )
 from agent_router.providers.anthropic_compat import AnthropicCompatProvider
 from agent_router.providers.base import BaseProvider, NonRetryableError, RetryableError
+from agent_router.sse import SSEDecodeError, SSEDecoder, SSEEvent
 
 logger = structlog.get_logger(__name__)
-
-# SSE error event pattern: event: error followed by data: {...}
-_SSE_ERROR_EVENT_RE = re.compile(
-    rb"event:\s*error\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
-)
 
 _RATE_LIMIT_ERROR_TYPES = {
     "rate_limit_error",
@@ -63,15 +58,33 @@ def _check_stream_error(buffer: bytes) -> None:
     This detects errors in streaming responses that return HTTP 200 but
     contain error events in the stream (like rate limit exceeded).
     """
-    m = _SSE_ERROR_EVENT_RE.search(buffer)
-    if not m:
+    decoder = SSEDecoder()
+    try:
+        events = decoder.feed(buffer)
+    except SSEDecodeError as exc:
+        raise NonRetryableError(f"Invalid SSE stream: {exc}") from exc
+    for event in events:
+        _raise_for_stream_error(event)
+
+
+def _raise_for_stream_error(event: SSEEvent) -> None:
+    """Raise the routing error represented by a decoded SSE error event."""
+    if event.event != "error":
         return
 
     try:
-        data = json.loads(m.group(1))
+        data = json.loads(event.data)
+        if not isinstance(data, dict):
+            raise TypeError("error event data must be an object")
         error = data.get("error", {})
+        if not isinstance(error, dict):
+            raise TypeError("error field must be an object")
         error_type = error.get("type", "")
         error_message = error.get("message", "Unknown stream error")
+        if not isinstance(error_type, str):
+            raise TypeError("error type must be a string")
+        if not isinstance(error_message, str):
+            error_message = str(error_message)
 
         if error_type in _AUTH_ERROR_TYPES:
             raise RetryableError(
@@ -87,10 +100,10 @@ def _check_stream_error(buffer: bytes) -> None:
             raise RetryableError(f"Stream error ({error_type}): {error_message}")
         # Unknown error types are non-retryable (don't blindly failover)
         raise NonRetryableError(f"Stream error ({error_type}): {error_message}")
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
         # Malformed error event — non-retryable since we can't identify the type
         raise NonRetryableError(
-            f"Stream error: {m.group(1).decode(errors='replace')[:500]}"
+            f"Stream error: {event.data.decode(errors='replace')[:500]}"
         ) from None
 
 
@@ -664,13 +677,16 @@ class Router:
                             "cache_read": provider_cfg.cache_read_price_per_million,
                             "cache_write": provider_cfg.cache_write_price_per_million,
                         }
-                    error_buffer = b""
+                    error_decoder = SSEDecoder()
                     async for chunk in provider.send_stream(request_body):
-                        error_buffer += chunk
-                        # 先检测再截断，避免大 chunk 中靠前的 event:error 被 trim 掉
-                        _check_stream_error(error_buffer)
-                        if len(error_buffer) > 8192:
-                            error_buffer = error_buffer[-4096:]
+                        try:
+                            events = error_decoder.feed(chunk)
+                        except SSEDecodeError as exc:
+                            raise NonRetryableError(
+                                f"Invalid SSE stream: {exc}"
+                            ) from exc
+                        for event in events:
+                            _raise_for_stream_error(event)
                         # 已 yield 后 client_started=True，异常不会再 failover
                         client_started = True
                         yield chunk

@@ -626,6 +626,67 @@ class TestRateLimitRouting:
             assert calls["n"] == 2
             assert b"message_start" in b"".join(chunks)
 
+    async def test_long_stream_error_split_across_chunks_is_not_lost(self, http_client):
+        """An event header must survive while a long split payload is incomplete."""
+        calls = {"n": 0}
+        error_prefix = (
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"api_error","message":"' + b"x" * 9000
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if "p1" in str(request.url):
+
+                async def body():
+                    yield error_prefix
+                    yield b'"}}\n\n'
+
+                return httpx.Response(200, content=body())
+            return httpx.Response(
+                200,
+                content=b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            config = AppConfig(
+                server=ServerConfig(),
+                router=RouterConfig(mode="failover"),
+                models={
+                    "m": VirtualModelConfig(
+                        providers=[
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p1",
+                                model="m1",
+                                api_key="k1",
+                                base_url="https://p1.test",
+                                priority=1,
+                            ),
+                            ProviderConfig(
+                                type="anthropic",
+                                name="p2",
+                                model="m2",
+                                api_key="k2",
+                                base_url="https://p2.test",
+                                priority=2,
+                            ),
+                        ]
+                    )
+                },
+            )
+            router = Router(config, client)
+            chunks: list[bytes] = []
+            with pytest.raises(RetryableError, match="api_error"):
+                async for chunk in router.route_stream(
+                    {"model": "m", "max_tokens": 10, "messages": [], "stream": True}
+                ):
+                    chunks.append(chunk)
+
+        assert calls["n"] == 1
+        assert chunks == [error_prefix]
+
     async def test_stream_error_before_yield_allows_failover(self, http_client):
         """首包即为 event:error 时不应先发给客户端，应可 failover."""
         calls = {"n": 0}

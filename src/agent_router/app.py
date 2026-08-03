@@ -31,16 +31,9 @@ from agent_router.routing import (
     Router,
     UnknownModelError,
 )
+from agent_router.sse import SSEDecoder, SSEEvent
 
 logger = structlog.get_logger(__name__)
-
-# 从 SSE 流中提取 usage 的正则 (message_start 有 input_tokens, message_delta 有 output_tokens)
-_SSE_MSG_START_RE = re.compile(
-    rb"event:\s*message_start\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
-)
-_SSE_MSG_DELTA_RE = re.compile(
-    rb"event:\s*message_delta\s*\r?\ndata:\s*(\{.*?\})\s*(?:\r?\n|$)", re.DOTALL
-)
 
 
 def _calculate_cost_usd(usage: Mapping[str, Any], outcome: Mapping[str, Any]) -> float:
@@ -699,6 +692,41 @@ async def _all_failed_response(
     )
 
 
+def _update_stream_usage(
+    events: list[SSEEvent], usage: dict[str, Any], seen: set[str]
+) -> None:
+    """Merge usage from the first valid Anthropic start and delta events.
+
+    Malformed or structurally unexpected data is ignored because accounting
+    metadata must never interrupt delivery of an otherwise valid response.
+
+    Args:
+        events: Newly completed SSE events from the upstream stream.
+        usage: Mutable aggregate updated with discovered token counts.
+        seen: Event names already consumed for usage accounting.
+    """
+    for event in events:
+        if event.event not in {"message_start", "message_delta"}:
+            continue
+        if event.event in seen:
+            continue
+        try:
+            payload = json.loads(event.data)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+
+        if event.event == "message_start":
+            message = payload.get("message")
+            event_usage = message.get("usage") if isinstance(message, Mapping) else None
+        else:
+            event_usage = payload.get("usage")
+        if isinstance(event_usage, Mapping):
+            usage.update(event_usage)
+        seen.add(event.event)
+
+
 async def _stream_wrapper(
     stream, *, outcome, recorder, virtual_model, request_body, start_time, request_id
 ):
@@ -708,40 +736,16 @@ async def _stream_wrapper(
     ASGI 消费，需在此重新绑定，使 routing 层（route_stream 函数体在首次
     async for 时才执行）的日志与 http.request 共用同一 request_id。
     """
-    buffer = b""
-    usage: dict = {}
-    got_msg_start = False
-    got_msg_delta = False
+    usage_decoder = SSEDecoder()
+    usage: dict[str, Any] = {}
+    usage_events_seen: set[str] = set()
     recorded = False
 
     if request_id is not None:
         bind_contextvars(request_id=request_id)
     try:
         async for chunk in stream:
-            buffer += chunk
-            # 限制 buffer 大小，只保留最近 32KB
-            if len(buffer) > 32768:
-                buffer = buffer[-16384:]
-            # 从 message_start 提取 input_tokens / cache
-            if not got_msg_start:
-                m = _SSE_MSG_START_RE.search(buffer)
-                if m:
-                    try:
-                        data = json.loads(m.group(1))
-                        usage.update(data.get("message", {}).get("usage", {}))
-                        got_msg_start = True
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-            # 从 message_delta 提取 output_tokens
-            if not got_msg_delta:
-                m = _SSE_MSG_DELTA_RE.search(buffer)
-                if m:
-                    try:
-                        data = json.loads(m.group(1))
-                        usage.update(data.get("usage", {}))
-                        got_msg_delta = True
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+            _update_stream_usage(usage_decoder.feed(chunk), usage, usage_events_seen)
 
             # 先更新 usage 再交付 chunk；若客户端在发送期间断开，取消记录仍能
             # 保留这个已从上游收到的 chunk 中的 token 信息。
