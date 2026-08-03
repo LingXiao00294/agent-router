@@ -398,6 +398,14 @@ def create_app(
             latency_ms = int((time.time() - start_time) * 1000)
             status_code = e.status_code or 502
             error_type = "invalid_request_error" if status_code < 500 else "api_error"
+            failover = [
+                {
+                    "provider": err["provider"],
+                    "model": err["model"],
+                    "error": err["error"],
+                }
+                for err in outcome.get("_failures", [])
+            ]
             recorder.submit(
                 virtual_model=virtual_model,
                 status="error",
@@ -405,6 +413,7 @@ def create_app(
                 error_message=str(e),
                 latency_ms=latency_ms,
                 request_body=body,
+                failover_details=failover or None,
             )
             logger.warning(
                 "request.non_retryable_error",

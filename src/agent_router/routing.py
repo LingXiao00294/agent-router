@@ -210,7 +210,7 @@ class Router:
             err_entry["retry_after"] = retry_after
         errors.append(err_entry)
 
-        if is_retryable and outcome is not None:
+        if outcome is not None:
             outcome.setdefault("_failures", []).append(
                 {
                     "provider": provider_cfg.name,

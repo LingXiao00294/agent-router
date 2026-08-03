@@ -149,7 +149,7 @@ models = [
 
 实际模型及价格只在对应 Provider 的 `models` 目录下定义一次。虚拟模型的 `models` 数组只能引用目录中已有的 `{ provider, model }`，数组顺序会在运行时生成从 1 开始的优先级；sticky 模式还必须提供位于该数组中的结构化 `pinned_model`。同一虚拟模型不能重复引用同一个实际模型。
 
-四类价格均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。正常写入的成功调用会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，四类价格快照保持 `NULL`。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
+四类价格均可选：未配置的价格在运行时保持 `None`，调用快照写入 SQLite `NULL`，费用计算时才按 `0`；显式配置 `0` 时快照保留为 `0`。正常写入的成功调用会保存最终实际使用的 Provider、模型、四类价格快照、Token 用量和 `cost_usd`，因此后续调价不会改变历史调用的解释结果。失败调用没有成功模型时，主 Provider 与四类价格快照保持 `NULL`，实际尝试过的 Provider、模型与错误仍保存在故障转移明细中。示例数值仅用于说明格式，请以 Provider 的实际价格为准。
 
 > **Breaking change**：旧版 `[[models.<name>.providers]]`、显式 `priority`、引用上的价格字段以及 `pinned_provider` 不再读取，也不会自动迁移。升级时请先把实际模型移入 `providers.<provider>.models`，再把虚拟模型改为上面的有序 `models` 与结构化 `pinned_model`；程序遇到旧格式会返回可操作的配置错误，不会改写原文件。
 

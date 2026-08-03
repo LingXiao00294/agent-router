@@ -661,6 +661,17 @@ class TestMessages:
         assert response.status_code == 400
         assert response.json()["error"]["type"] == "invalid_request_error"
         assert "max_tokens is required" in response.json()["error"]["message"]
+        await recorder.wait_idle(timeout=1)
+        call = await _only_call_detail(store)
+        assert call["provider_name"] is None
+        assert call["provider_model"] is None
+        assert json.loads(call["failover_details"]) == [
+            {
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5-20251001",
+                "error": call["error_message"],
+            }
+        ]
 
     async def test_forwards_anthropic_feature_headers(
         self, app_config, store, recorder
