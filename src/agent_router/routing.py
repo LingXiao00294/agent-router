@@ -53,6 +53,10 @@ _AUTH_ERROR_TYPES = {
 }
 
 
+class _RoutingConfigChanged(Exception):
+    """Signal that a not-yet-started attempt must use a newer config snapshot."""
+
+
 def _check_stream_error(buffer: bytes) -> None:
     """Check SSE buffer for error events and raise appropriate exception.
 
@@ -106,6 +110,7 @@ def _max_retry_after(errors: list[dict]) -> float | None:
 class Router:
     def __init__(self, config: AppConfig, http_client) -> None:
         self.config = config
+        self._config_generation = 0
         self.http = http_client
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=config.router.failure_threshold,
@@ -124,6 +129,29 @@ class Router:
         self.circuit_breaker.failure_threshold = config.router.failure_threshold
         self.circuit_breaker.recovery_timeout = config.router.recovery_timeout
         self.config = config
+        self._config_generation += 1
+
+    def _ensure_config_generation(self, generation: int) -> None:
+        """Reject an attempt whose Provider snapshot predates a hot reload."""
+        if generation != self._config_generation:
+            raise _RoutingConfigChanged
+
+    async def _get_providers_for_generation(
+        self, virtual_model: str, generation: int
+    ) -> list[ProviderConfig]:
+        """Return candidates only when routing configuration stayed unchanged.
+
+        Raises:
+            _RoutingConfigChanged: If hot reload overlaps candidate discovery,
+                including an error produced from the obsolete configuration.
+        """
+        try:
+            providers = await self._get_providers(virtual_model)
+        except (UnknownModelError, AllProvidersFailedError, NoProviderAvailableError):
+            self._ensure_config_generation(generation)
+            raise
+        self._ensure_config_generation(generation)
+        return providers
 
     def _virtual_model(self, name: str) -> VirtualModelConfig:
         if name not in self.config.models:
@@ -370,9 +398,34 @@ class Router:
         outcome 可选字典，成功时会写入最终 provider、模型、尝试次数、URL，
         以及保留未配置 ``None`` 值的价格信息。
         """
+        while True:
+            generation = self._config_generation
+            try:
+                return await self._route_non_stream_once(
+                    request_body,
+                    outcome,
+                    generation=generation,
+                )
+            except _RoutingConfigChanged:
+                logger.info(
+                    "request.reroute_config_reload",
+                    model=request_body.get("model", ""),
+                    stream=False,
+                    from_generation=generation,
+                    to_generation=self._config_generation,
+                )
+
+    async def _route_non_stream_once(
+        self,
+        request_body: dict,
+        outcome: dict | None,
+        *,
+        generation: int,
+    ) -> dict:
+        """Route once against one immutable configuration generation."""
         virtual_model = request_body.get("model", "")
+        providers = await self._get_providers_for_generation(virtual_model, generation)
         allow_failover = self.config.router.mode == "failover"
-        providers = await self._get_providers(virtual_model)
 
         request_id = get_contextvars().get("request_id") or str(uuid.uuid4())
         start_time = time.time()
@@ -411,6 +464,7 @@ class Router:
                         )
                         continue
 
+                    self._ensure_config_generation(generation)
                     logger.info(
                         "provider.try",
                         request_id=request_id,
@@ -456,6 +510,7 @@ class Router:
                     return result
 
             except (ProviderCooldownError, ProviderCapacityError) as e:
+                self._ensure_config_generation(generation)
                 await self._record_gate_skip(
                     e,
                     provider_cfg,
@@ -493,6 +548,7 @@ class Router:
                 if permit is not None:
                     await self.circuit_breaker.release(permit)
 
+        self._ensure_config_generation(generation)
         raise self._exhausted(virtual_model, errors, start_time, len(providers))
 
     async def route_stream(
@@ -503,9 +559,45 @@ class Router:
         outcome 可选字典，成功时会写入最终 provider、模型、尝试次数、URL，
         以及保留未配置 ``None`` 值的价格信息。
         """
+        client_started = False
+        while True:
+            generation = self._config_generation
+            generation_stream = self._route_stream_once(
+                request_body,
+                outcome,
+                generation=generation,
+            )
+            try:
+                async for chunk in generation_stream:
+                    client_started = True
+                    yield chunk
+                return
+            except _RoutingConfigChanged:
+                if client_started:
+                    raise RuntimeError(
+                        "routing configuration changed after stream output started"
+                    ) from None
+                logger.info(
+                    "request.reroute_config_reload",
+                    model=request_body.get("model", ""),
+                    stream=True,
+                    from_generation=generation,
+                    to_generation=self._config_generation,
+                )
+            finally:
+                await generation_stream.aclose()
+
+    async def _route_stream_once(
+        self,
+        request_body: dict,
+        outcome: dict | None,
+        *,
+        generation: int,
+    ) -> AsyncGenerator[bytes, None]:
+        """Route one stream against one immutable configuration generation."""
         virtual_model = request_body.get("model", "")
+        providers = await self._get_providers_for_generation(virtual_model, generation)
         allow_failover = self.config.router.mode == "failover"
-        providers = await self._get_providers(virtual_model)
 
         request_id = get_contextvars().get("request_id") or str(uuid.uuid4())
         start_time = time.time()
@@ -547,6 +639,7 @@ class Router:
                         )
                         continue
 
+                    self._ensure_config_generation(generation)
                     logger.info(
                         "provider.try",
                         request_id=request_id,
@@ -602,6 +695,7 @@ class Router:
                     return
 
             except (ProviderCooldownError, ProviderCapacityError) as e:
+                self._ensure_config_generation(generation)
                 can_failover = allow_failover and not client_started
                 await self._record_gate_skip(
                     e,
@@ -646,6 +740,7 @@ class Router:
                 if permit is not None:
                     await self.circuit_breaker.release(permit)
 
+        self._ensure_config_generation(generation)
         raise self._exhausted(virtual_model, errors, start_time, len(providers))
 
     def _exhausted(

@@ -176,7 +176,7 @@ models = [
 
 Router 会将客户端的 `anthropic-version` 与 `anthropic-beta` 请求头转发给最终 Anthropic-compatible Provider；认证头始终由 Provider 配置生成，不会透传客户端 token。流式客户端中途断开时会立即关闭上游响应并记录 `client_cancelled`，避免长期占用连接和 Provider 并发槽。
 
-`PUT /api/config` 会先完成候选配置校验、TOML 序列化验证和运行时构建，再原子替换文件并切换 Router 与日志配置；任一步失败都会保留或恢复旧文件与旧运行时。热重载时已经获得 Provider 槽位的真实在途调用可完成，仍在本地队列中的旧代际请求会退出并重新进入既有故障转移/容量错误路径，不能用旧 URL、密钥或并发限制继续调用。删除仍被引用的 Provider 或实际模型会返回 `409` 和 `provider_in_use` / `model_in_use`，并在 `referenced_by` 中列出虚拟模型。必须先单独保存引用移除，再执行删除。
+`PUT /api/config` 会先完成候选配置校验、TOML 序列化验证和运行时构建，再原子替换文件并切换 Router 与日志配置；任一步失败都会保留或恢复旧文件与旧运行时。热重载时已经开始上游 I/O 的真实在途调用可完成；尚未发起上游 I/O 的旧代际请求（包括本地队列中的请求）会透明地按最新配置重新选择 Provider，不会把配置更新误报为容量不足，也不能用旧 URL、密钥或并发限制继续调用。删除仍被引用的 Provider 或实际模型会返回 `409` 和 `provider_in_use` / `model_in_use`，并在 `referenced_by` 中列出虚拟模型。必须先单独保存引用移除，再执行删除。
 
 ### 调用记录数据库兼容性
 
