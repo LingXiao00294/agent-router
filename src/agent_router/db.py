@@ -425,35 +425,55 @@ class CallStore:
 
 
 def _estimate_request_tokens(body: dict | None) -> int | None:
-    """粗略估算请求 token 数 (用于流式请求无法从响应获取时)."""
+    """Estimate request tokens without trusting the upstream body shape.
+
+    Only string text and base64 image data in recognized Anthropic structures
+    contribute to the estimate. Unknown or malformed blocks are ignored so an
+    invalid client request can still be persisted for diagnosis.
+
+    Args:
+        body: Parsed request object, which may contain unvalidated nested data.
+
+    Returns:
+        A coarse positive token estimate, or ``None`` when no estimatable
+        content exists.
+    """
     if not body:
         return None
-    messages = body.get("messages", [])
-    if not messages:
-        return None
     total_chars = 0
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        messages = []
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             total_chars += len(content)
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    total_chars += len(block.get("text", ""))
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        total_chars += len(text)
                 elif isinstance(block, dict) and block.get("type") == "image":
                     # base64 图片数据 ≈ token 数的 1/3
-                    source = block.get("source", {})
-                    data = source.get("data", "")
-                    total_chars += len(data) // 3
+                    source = block.get("source")
+                    if isinstance(source, dict):
+                        data = source.get("data")
+                        if isinstance(data, str):
+                            total_chars += len(data) // 3
     system = body.get("system", "")
     if isinstance(system, str):
         total_chars += len(system)
     elif isinstance(system, list):
         for s in system:
             if isinstance(s, dict):
-                total_chars += len(s.get("text", ""))
+                text = s.get("text")
+                if isinstance(text, str):
+                    total_chars += len(text)
     # 粗略估算: 英文 ~4 chars/token, 中文 ~1.5 chars/token
-    return max(1, int(total_chars / 3))
+    return max(1, int(total_chars / 3)) if total_chars else None
 
 
 def _serialize_call_body(body: dict | str | None) -> str | None:

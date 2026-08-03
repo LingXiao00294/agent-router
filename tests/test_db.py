@@ -12,6 +12,7 @@ from agent_router.db import (
     SCHEMA,
     CallStore,
     IncompatibleDatabaseError,
+    _estimate_request_tokens,
     _serialize_call_body,
 )
 
@@ -147,6 +148,30 @@ async def test_daily_trend_rejects_non_positive_window(tmp_path):
             await store.daily_trend(days=0)
     finally:
         await store.close()
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"messages": [None, "bad", {"content": [{"type": "text", "text": 7}]}]}, None),
+        ({"messages": [], "system": "system prompt"}, 4),
+        (
+            {
+                "messages": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image", "source": {"data": "x" * 12}},
+                        ]
+                    }
+                ]
+            },
+            3,
+        ),
+    ],
+)
+def test_request_token_estimate_ignores_malformed_nested_content(body, expected):
+    assert _estimate_request_tokens(body) == expected
 
 
 @pytest.mark.parametrize(

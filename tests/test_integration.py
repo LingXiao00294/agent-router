@@ -704,7 +704,13 @@ class TestMessages:
                     json={
                         "model": "test-router",
                         "max_tokens": 10,
-                        "messages": [],
+                        "messages": [
+                            None,
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": 42}],
+                            },
+                        ],
                     },
                 )
 
@@ -716,6 +722,7 @@ class TestMessages:
         assert call["provider_name"] is None
         assert call["provider_model"] is None
         assert call["attempt"] == 1
+        assert call["request_tokens"] is None
         assert json.loads(call["failover_details"]) == [
             {
                 "provider": "anthropic",
