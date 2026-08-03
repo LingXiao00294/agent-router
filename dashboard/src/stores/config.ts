@@ -335,6 +335,9 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   async function save() {
+    if (saving.value) {
+      throw new Error("配置正在保存，请稍候");
+    }
     if (!draft.value) return;
     if (!validate()) {
       throw new Error(validationFailureMessage("save"));
@@ -371,6 +374,9 @@ export const useConfigStore = defineStore("config", () => {
 
   /** Top-bar failover switch: refuses when config page has unsaved edits. */
   async function setRouterMode(next: RouterMode) {
+    if (saving.value) {
+      throw new Error("配置正在保存，请稍候");
+    }
     if (dirty.value) {
       throw new Error("配置页有未保存更改，请先保存或刷新后再切换故障转移");
     }

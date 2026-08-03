@@ -323,4 +323,40 @@ describe("request generations", () => {
     expect(store.error).toBeNull();
     expect(store.loading).toBe(false);
   });
+
+  test("config rejects a concurrent save without sending a second PUT", async () => {
+    const put = deferred<Response>();
+    let putCount = 0;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/config/models") {
+        return Promise.resolve(jsonResponse(virtualModels()));
+      }
+      if (path === "/api/config" && init?.method === "PUT") {
+        putCount += 1;
+        return put.promise;
+      }
+      if (path === "/api/config") {
+        return Promise.resolve(jsonResponse(validConfig()));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useConfigStore();
+    await store.load();
+    store.draft!.server.host = "first-edit";
+
+    const firstSave = store.save();
+    store.draft!.server.host = "newer-edit";
+
+    expect(store.saving).toBe(true);
+    await expect(store.save()).rejects.toThrow("配置正在保存");
+    expect(putCount).toBe(1);
+
+    put.resolve(jsonResponse({ status: "ok" }));
+    await firstSave;
+
+    expect(store.saving).toBe(false);
+    expect(store.draft?.server.host).toBe("newer-edit");
+    expect(store.dirty).toBe(true);
+  });
 });

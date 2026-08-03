@@ -68,6 +68,7 @@ function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     if (route.path.startsWith("/config") && config.dirty) {
       e.preventDefault();
+      if (config.saving) return;
       void config
         .save()
         .then(async () => {
