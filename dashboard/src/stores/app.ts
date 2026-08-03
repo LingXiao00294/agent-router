@@ -98,20 +98,33 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /** Immediate mode PUT via config store sanitize path; syncs app.config after. */
-  async function setMode(next: RouterMode) {
-    if (savingMode.value) return;
+  async function setMode(next: RouterMode): Promise<boolean> {
+    if (savingMode.value) {
+      throw new Error("模式正在切换，请稍候");
+    }
     const configStore = useConfigStore();
     if (configStore.dirty) {
       throw new Error("配置页有未保存更改，请先保存或刷新后再切换故障转移");
     }
     const prev = config.value?.router.mode;
-    if (prev === next) return;
+    if (prev === next) return true;
     savingMode.value = true;
+    let persisted = false;
     try {
-      await configStore.setRouterMode(next);
-      await loadConfig(true);
+      const editorConfigOk = await configStore.setRouterMode(next);
+      persisted = true;
+      if (config.value) {
+        config.value = {
+          ...config.value,
+          router: { ...config.value.router, mode: next },
+        };
+      }
+      const appConfigOk = await loadConfig(true);
+      const refreshed = editorConfigOk && appConfigOk;
+      if (!refreshed) staleData.value = true;
+      return refreshed;
     } catch (err) {
-      if (config.value && prev) {
+      if (!persisted && config.value && prev) {
         config.value = {
           ...config.value,
           router: { ...config.value.router, mode: prev },

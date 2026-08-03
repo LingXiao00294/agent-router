@@ -370,6 +370,105 @@ describe("request generations", () => {
     expect(store.loading).toBe(false);
   });
 
+  test("config save remains committed when its post-PUT reload fails", async () => {
+    let configGets = 0;
+    let putCount = 0;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/config/models") {
+        return Promise.resolve(jsonResponse(virtualModels()));
+      }
+      if (path === "/api/config" && init?.method === "PUT") {
+        putCount += 1;
+        return Promise.resolve(jsonResponse({ status: "ok" }));
+      }
+      if (path === "/api/config") {
+        configGets += 1;
+        return Promise.resolve(
+          configGets === 1
+            ? jsonResponse(validConfig())
+            : jsonResponse({ detail: "post-save reload failed" }, 502),
+        );
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useConfigStore();
+    await store.load();
+    store.draft!.server.host = "saved-despite-reload-error";
+
+    await expect(store.save()).resolves.toBe(false);
+
+    expect(putCount).toBe(1);
+    expect(store.draft?.server.host).toBe("saved-despite-reload-error");
+    expect(store.dirty).toBe(false);
+    expect(store.error).toContain("post-save reload failed");
+    expect(store.saving).toBe(false);
+  });
+
+  test("mode switch keeps the persisted mode when reconciliation fails", async () => {
+    let configGets = 0;
+    let putMode: string | null = null;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/config/models") {
+        return Promise.resolve(jsonResponse(virtualModels()));
+      }
+      if (path === "/api/config" && init?.method === "PUT") {
+        putMode = (JSON.parse(String(init.body)) as AppConfig).router.mode;
+        return Promise.resolve(jsonResponse({ status: "ok" }));
+      }
+      if (path === "/api/config") {
+        configGets += 1;
+        return Promise.resolve(
+          configGets === 1
+            ? jsonResponse(validConfig())
+            : jsonResponse({ detail: "mode reconciliation failed" }, 502),
+        );
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useConfigStore();
+    await store.load();
+
+    await expect(store.setRouterMode("sticky")).resolves.toBe(false);
+
+    expect(putMode).toBe("sticky");
+    expect(store.draft?.router.mode).toBe("sticky");
+    expect(store.dirty).toBe(false);
+    expect(store.error).toContain("mode reconciliation failed");
+    expect(store.saving).toBe(false);
+  });
+
+  test("app mode reflects a persisted switch when both reloads fail", async () => {
+    let configGets = 0;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/config/models") {
+        return Promise.resolve(jsonResponse(virtualModels()));
+      }
+      if (path === "/api/config" && init?.method === "PUT") {
+        return Promise.resolve(jsonResponse({ status: "ok" }));
+      }
+      if (path === "/api/config") {
+        configGets += 1;
+        return Promise.resolve(
+          configGets === 1
+            ? jsonResponse(validConfig())
+            : jsonResponse({ detail: `reload-${configGets}-failed` }, 502),
+        );
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const app = useAppStore();
+    app.config = validConfig();
+
+    await expect(app.setMode("sticky")).resolves.toBe(false);
+
+    expect(app.mode).toBe("sticky");
+    expect(app.staleData).toBe(true);
+    expect(app.configError).toContain("reload-3-failed");
+  });
+
   test("config rejects a concurrent save without sending a second PUT", async () => {
     const put = deferred<Response>();
     let putCount = 0;

@@ -53,8 +53,12 @@ async function onFailoverChange(e: Event) {
   const next = input.checked ? "failover" : "sticky";
   pendingMode.value = next;
   try {
-    await app.setMode(next);
-    toast.success(input.checked ? "故障转移已开启" : "已切换到指定模型模式");
+    const refreshed = await app.setMode(next);
+    if (refreshed) {
+      toast.success(input.checked ? "故障转移已开启" : "已切换到指定模型模式");
+    } else {
+      toast.push("模式已切换，但重新加载失败，数据可能过期", "info");
+    }
   } catch (err) {
     pendingMode.value = null;
     input.checked = failoverEnabled.value;

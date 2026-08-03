@@ -74,9 +74,14 @@ function onKey(e: KeyboardEvent) {
       if (config.saving) return;
       void config
         .save()
-        .then(async () => {
-          await app.loadConfig(true);
-          toast.success("已刷新");
+        .then(async (editorConfigOk) => {
+          const appConfigOk = await app.loadConfig(true);
+          if (editorConfigOk && appConfigOk) {
+            toast.success("已保存");
+          } else {
+            app.staleData = true;
+            toast.push("配置已保存，但重新加载失败，数据可能过期", "info");
+          }
         })
         .catch((err: Error) => toast.error(err.message));
     }

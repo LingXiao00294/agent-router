@@ -334,11 +334,12 @@ export const useConfigStore = defineStore("config", () => {
       : "请先修正表单错误";
   }
 
-  async function save() {
+  /** Save the current snapshot, reporting whether the post-write reload succeeded. */
+  async function save(): Promise<boolean> {
     if (saving.value) {
       throw new Error("配置正在保存，请稍候");
     }
-    if (!draft.value) return;
+    if (!draft.value) return true;
     if (!validate()) {
       throw new Error(validationFailureMessage("save"));
     }
@@ -351,8 +352,13 @@ export const useConfigStore = defineStore("config", () => {
       await api.putConfig(payload);
       baseline.value = payloadSnapshot;
       if (loadContext() === payloadSnapshot) {
-        await startLoad(true);
+        try {
+          await startLoad(true);
+        } catch {
+          return false;
+        }
       }
+      return true;
     } catch (err) {
       const conflict = referenceConflict(err);
       if (conflict) {
@@ -372,8 +378,8 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
-  /** Top-bar failover switch: refuses when config page has unsaved edits. */
-  async function setRouterMode(next: RouterMode) {
+  /** Persist a top-bar mode change and report whether its reload succeeded. */
+  async function setRouterMode(next: RouterMode): Promise<boolean> {
     if (saving.value) {
       throw new Error("配置正在保存，请稍候");
     }
@@ -386,7 +392,7 @@ export const useConfigStore = defineStore("config", () => {
     if (!draft.value) {
       throw new Error("配置未加载");
     }
-    if (draft.value.router.mode === next) return;
+    if (draft.value.router.mode === next) return true;
 
     saving.value = true;
     const previousError = error.value;
@@ -411,8 +417,13 @@ export const useConfigStore = defineStore("config", () => {
       await api.putConfig(payload);
       baseline.value = payloadSnapshot;
       if (loadContext() === payloadSnapshot) {
-        await startLoad(true);
+        try {
+          await startLoad(true);
+        } catch {
+          return false;
+        }
       }
+      return true;
     } catch (err) {
       if (draft.value && draft.value.router.mode === next) {
         draft.value = {
