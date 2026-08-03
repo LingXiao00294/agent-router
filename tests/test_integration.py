@@ -421,16 +421,24 @@ class TestCostCalculation:
                     providers=[
                         ProviderConfig(
                             type="anthropic",
-                            name="provider",
+                            name="first",
                             model="real-model",
                             api_key="test-key",
-                            base_url="https://provider.test",
+                            base_url="https://first.test",
                             priority=1,
                             input_price_per_million=1.0,
                             output_price_per_million=4.0,
                             cache_read_price_per_million=0.1,
                             cache_write_price_per_million=1.2,
-                        )
+                        ),
+                        ProviderConfig(
+                            type="anthropic",
+                            name="second",
+                            model="real-model",
+                            api_key="test-key",
+                            base_url="https://second.test",
+                            priority=2,
+                        ),
                     ]
                 )
             },
@@ -449,6 +457,7 @@ class TestCostCalculation:
         call = await _only_call_detail(store)
         assert call["provider_name"] is None
         assert call["provider_model"] is None
+        assert call["attempt"] == 2
         assert call["input_price_per_million"] is None
         assert call["output_price_per_million"] is None
         assert call["cache_read_price_per_million"] is None
@@ -706,6 +715,7 @@ class TestMessages:
         call = await _only_call_detail(store)
         assert call["provider_name"] is None
         assert call["provider_model"] is None
+        assert call["attempt"] == 1
         assert json.loads(call["failover_details"]) == [
             {
                 "provider": "anthropic",
@@ -941,6 +951,7 @@ class TestMessages:
         assert response.json()["error"]["type"] == "invalid_request_error"
         assert len(attempted_records) == 1
         assert attempted_records[0]["error_type"] == "unknown_model"
+        assert attempted_records[0]["attempt"] == 0
 
     async def test_stream_rate_limit_uses_semantic_record_error_type(
         self, store, recorder
