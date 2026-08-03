@@ -57,12 +57,14 @@ export const useAppStore = defineStore("app", () => {
     configError.value = null;
     try {
       const result = normalizeAppConfig(await api.getConfig());
-      if (seq !== configSeq) return;
+      if (seq !== configSeq) return true;
       config.value = result;
+      return true;
     } catch (err) {
-      if (seq !== configSeq) return;
+      if (seq !== configSeq) return true;
       configError.value = err instanceof Error ? err.message : "加载配置失败";
       if (!silent) throw err;
+      return false;
     } finally {
       if (seq === configSeq) configLoading.value = false;
     }
@@ -72,12 +74,27 @@ export const useAppStore = defineStore("app", () => {
     const seq = ++circuitSeq;
     try {
       const result = await api.getCircuitBreaker();
-      if (seq !== circuitSeq) return;
+      if (seq !== circuitSeq) return true;
       circuit.value = result;
+      return true;
     } catch (err) {
-      if (seq !== circuitSeq) return;
+      if (seq !== circuitSeq) return true;
       if (!silent) throw err;
+      return false;
     }
+  }
+
+  /** Load all startup state without leaking a rejected task to the browser. */
+  async function loadInitialState(): Promise<boolean> {
+    const results = await Promise.allSettled([
+      checkHealth(),
+      loadConfig(),
+      loadCircuit(),
+    ]);
+    const failed =
+      healthy.value === false || results.some((result) => result.status === "rejected");
+    staleData.value = failed;
+    return failed;
   }
 
   /** Immediate mode PUT via config store sanitize path; syncs app.config after. */
@@ -128,6 +145,7 @@ export const useAppStore = defineStore("app", () => {
     checkHealth,
     loadConfig,
     loadCircuit,
+    loadInitialState,
     setMode,
   };
 });

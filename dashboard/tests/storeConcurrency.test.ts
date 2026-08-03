@@ -136,6 +136,52 @@ afterEach(() => {
 });
 
 describe("request generations", () => {
+  test("app startup settles partial failures and marks data stale", async () => {
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/health") {
+        return Promise.resolve(jsonResponse({ detail: "router unavailable" }, 503));
+      }
+      if (path === "/api/config") {
+        return Promise.resolve(jsonResponse({ detail: "config unavailable" }, 502));
+      }
+      if (path === "/api/circuit-breaker") {
+        return Promise.resolve(jsonResponse({ provider: "closed" }));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useAppStore();
+
+    await expect(store.loadInitialState()).resolves.toBe(true);
+
+    expect(store.healthy).toBe(false);
+    expect(store.config).toBeNull();
+    expect(store.configError).toContain("config unavailable");
+    expect(store.circuit).toEqual({ provider: "closed" });
+    expect(store.staleData).toBe(true);
+  });
+
+  test("app silent config and circuit loaders report failures", async () => {
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/config") {
+        return Promise.resolve(jsonResponse({ detail: "config failed" }, 502));
+      }
+      if (path === "/api/circuit-breaker") {
+        return Promise.resolve(jsonResponse({ detail: "circuit failed" }, 502));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    const store = useAppStore();
+
+    await expect(store.loadConfig(true)).resolves.toBe(false);
+    await expect(store.loadCircuit(true)).resolves.toBe(false);
+
+    expect(store.configError).toContain("config failed");
+    expect(store.config).toBeNull();
+    expect(store.circuit).toEqual({});
+  });
+
   test("app stores keep the newest global health, config, and circuit results", async () => {
     const health = [deferred<Response>(), deferred<Response>()];
     const configs = [deferred<Response>(), deferred<Response>()];

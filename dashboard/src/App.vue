@@ -24,18 +24,21 @@ let silentRefreshSeq = 0;
 
 async function bootstrap() {
   app.initTheme();
-  await Promise.all([
-    app.checkHealth(),
-    app.loadConfig(true),
-    app.loadCircuit(true),
-  ]);
+  if (await app.loadInitialState()) {
+    toast.error("初始数据加载失败，数据可能过期");
+  }
 }
 
 async function silentRefresh() {
   const seq = ++silentRefreshSeq;
   let failed = false;
   try {
-    await Promise.all([app.checkHealth(), app.loadCircuit(true)]);
+    const [, configOk, circuitOk] = await Promise.all([
+      app.checkHealth(),
+      app.loadConfig(true),
+      app.loadCircuit(true),
+    ]);
+    if (!configOk || !circuitOk) failed = true;
   } catch {
     failed = true;
   }
