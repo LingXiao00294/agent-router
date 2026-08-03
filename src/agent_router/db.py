@@ -392,6 +392,20 @@ class CallStore:
         return [dict(r) for r in rows]
 
     async def daily_trend(self, days: int = 30) -> list[dict]:
+        """Return metrics for today and the preceding UTC calendar days.
+
+        Args:
+            days: Inclusive number of calendar days ending today.
+
+        Returns:
+            Existing daily aggregates in ascending date order. Days without
+            calls are omitted for the Dashboard to fill explicitly.
+
+        Raises:
+            ValueError: If ``days`` is less than one.
+        """
+        if days < 1:
+            raise ValueError("days 必须大于等于 1")
         rows = await self.conn.execute_fetchall(
             """SELECT
                 DATE(timestamp) AS day,
@@ -405,7 +419,7 @@ class CallStore:
             FROM calls
             WHERE timestamp >= DATE('now', ?)
             GROUP BY day ORDER BY day""",
-            (f"-{days} days",),
+            (f"-{days - 1} days",),
         )
         return [dict(r) for r in rows]
 

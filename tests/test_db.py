@@ -115,6 +115,40 @@ async def test_list_calls_returns_summaries_while_get_call_keeps_details(tmp_pat
     assert detail["input_price_per_million"] == 1.0
 
 
+async def test_daily_trend_uses_exact_inclusive_calendar_window(tmp_path):
+    store = CallStore(str(tmp_path / "calls.db"))
+    await store.init()
+    try:
+        today_id = await store.record(virtual_model="router", status="success")
+        yesterday_id = await store.record(virtual_model="router", status="success")
+        await store.conn.execute(
+            "UPDATE calls SET timestamp = DATE('now') WHERE id = ?", (today_id,)
+        )
+        await store.conn.execute(
+            "UPDATE calls SET timestamp = DATE('now', '-1 day') WHERE id = ?",
+            (yesterday_id,),
+        )
+        await store.conn.commit()
+
+        one_day = await store.daily_trend(days=1)
+        two_days = await store.daily_trend(days=2)
+    finally:
+        await store.close()
+
+    assert [row["count"] for row in one_day] == [1]
+    assert [row["count"] for row in two_days] == [1, 1]
+
+
+async def test_daily_trend_rejects_non_positive_window(tmp_path):
+    store = CallStore(str(tmp_path / "calls.db"))
+    await store.init()
+    try:
+        with pytest.raises(ValueError, match="days"):
+            await store.daily_trend(days=0)
+    finally:
+        await store.close()
+
+
 @pytest.mark.parametrize(
     "body",
     [
