@@ -356,7 +356,7 @@ data: {"type":"message_stop"}
 
 **`POST /v1/messages` 处理流程：**
 
-1. 有界读取请求体 JSON，并校验 `model` 为非空字符串、`stream`（若提供）为布尔值
+1. Router 与独立 Dashboard 代理都以 50 MiB 上限有界读取请求体（包括 chunked 请求），Router 随后解析 JSON，并校验 `model` 为非空字符串、`stream`（若提供）为布尔值
 2. 提取 `model` 字段，并把 `anthropic-version` / `anthropic-beta` 作为仅供 Provider 使用的内部元数据 → 查找虚拟模型对应的 provider 链
 3. 未找到 → 返回 400 + 已知模型列表
 4. `stream: true` → 受管 `StreamingResponse(routing.send_stream(...), media_type="text/event-stream")`；无论正常结束、发送失败还是取消都主动关闭内层流
@@ -499,7 +499,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 
 ### 10. Dashboard (Vue) — 观测与配置管理
 
-Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。
+Vue 3 + Vite + TypeScript 前端，从 router 的 `/api/*` 接口获取数据。独立 Dashboard 服务反向代理 `/api/*`、`/v1/*` 与 `/health`，转发时删除固定及 `Connection` 动态声明的 hop-by-hop 头，并在进入内存前执行与 Router 一致的 50 MiB 正文上限。
 
 **页面布局：**
 ```

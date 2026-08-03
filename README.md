@@ -172,7 +172,7 @@ models = [
 | `GET` | `/api/config/models` | 查看虚拟模型的有序引用与结构化 pin |
 | `PUT` | `/api/config` | 校验、原子写入并热重载配置 |
 
-`POST /v1/messages` 只接受顶层为对象的有效 JSON，请求体上限为 50 MiB；`model` 必须是非空字符串，`stream` 若提供则必须是布尔值。超过正文上限返回 `413 invalid_request_error`，畸形 JSON、非对象 JSON 或字段类型错误返回 `400 invalid_request_error`。
+`POST /v1/messages` 只接受顶层为对象的有效 JSON，请求体上限为 50 MiB；独立 Dashboard 代理会在入口执行相同的有界读取，因此 chunked 请求也不能绕过限制。`model` 必须是非空字符串，`stream` 若提供则必须是布尔值。超过正文上限返回 `413 invalid_request_error`，畸形 JSON、非对象 JSON 或字段类型错误返回 `400 invalid_request_error`。
 
 Router 会将客户端的 `anthropic-version` 与 `anthropic-beta` 请求头转发给最终 Anthropic-compatible Provider；认证头始终由 Provider 配置生成，不会透传客户端 token。流式客户端中途断开时会立即关闭上游响应并记录 `client_cancelled`，避免长期占用连接和 Provider 并发槽。
 
@@ -200,7 +200,8 @@ bun test          # Dashboard 状态逻辑与展示辅助函数测试
 bun run build     # 生产构建 → dashboard/dist/
 ```
 
-构建后通过 `uv run agent-router dashboard` 启动独立面板，访问 `http://127.0.0.1:5173`。
+构建后通过 `uv run agent-router dashboard` 启动独立面板，访问 `http://127.0.0.1:5173`。代理会删除固定及 `Connection` 动态声明的 hop-by-hop 请求/响应头，避免把只属于单段连接的控制信息带入下一跳。
+
 为防止误清空上游，Dashboard 保存配置时要求至少保留一个 Provider 和一个虚拟模型；每个虚拟模型至少选择一个实际模型。
 Providers 页面是 Dashboard 管理实际模型目录的入口。每个 Provider 使用独立卡片展示类型、密钥状态、Base URL 和模型摘要；模型超过四个时摘要显示可展开的“还有 N 个”。“设置”只编辑 Provider 连接与限流参数，“添加模型”或点击 `<provider>/<model>` 标签则在独立弹窗中新增模型或编辑四类价格。实际模型价格归 Provider 目录管理，不再出现在虚拟模型引用上。
 虚拟模型页只能从该目录中按 Provider 分组选择，不允许自由输入名称或重复引用；长名称会在固定宽度的选择器中截断显示，完整值仍保留在标题和原生选择列表中。左侧拖拽把手调整的数组顺序就是 failover 优先级。

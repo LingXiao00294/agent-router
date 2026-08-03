@@ -17,9 +17,11 @@ from agent_router.responses import ManagedStreamingResponse
 DEFAULT_ROUTER_URL = "http://127.0.0.1:9456"
 
 _PROXY_METHODS: Final = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+_MAX_PROXY_BODY_BYTES = 50 * 1024 * 1024
 _HOP_BY_HOP_HEADERS: Final = {
     "connection",
     "keep-alive",
+    "proxy-connection",
     "proxy-authenticate",
     "proxy-authorization",
     "te",
@@ -27,6 +29,10 @@ _HOP_BY_HOP_HEADERS: Final = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+class ProxyBodyTooLarge(ValueError):
+    """Raised when a proxied request body exceeds the Dashboard limit."""
 
 
 def find_dashboard_dist(explicit_path: str | Path | None = None) -> Path | None:
@@ -131,7 +137,15 @@ async def _proxy_to_router(
     path = request.url.path
     if request.url.query:
         path = f"{path}?{request.url.query}"
-    body = await request.body()
+    try:
+        body = await _read_proxy_body(request)
+    except ProxyBodyTooLarge as exc:
+        if request.url.path == "/v1/messages":
+            return JSONResponse(
+                {"error": {"type": "invalid_request_error", "message": str(exc)}},
+                status_code=413,
+            )
+        return JSONResponse({"detail": str(exc)}, status_code=413)
 
     if _is_streaming_messages_request(request, body):
         return await _stream_from_router(request, http_client, path, body)
@@ -160,6 +174,39 @@ async def _proxy_to_router(
         status_code=upstream.status_code,
         headers=dict(_filtered_headers(upstream.headers.items(), response=True)),
     )
+
+
+async def _read_proxy_body(request: Request) -> bytes:
+    """Read a proxied request body without exceeding the memory boundary.
+
+    The Content-Length header provides an early rejection path, while streamed
+    byte counting enforces the same limit for chunked requests and dishonest
+    declarations.
+
+    Args:
+        request: Incoming Dashboard request whose body has not been consumed.
+
+    Returns:
+        The complete request body within the configured byte limit.
+
+    Raises:
+        ProxyBodyTooLarge: If the declared or received body exceeds the limit.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = 0
+        if declared_length > _MAX_PROXY_BODY_BYTES:
+            raise ProxyBodyTooLarge(f"请求体超过 {_MAX_PROXY_BODY_BYTES} 字节上限")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _MAX_PROXY_BODY_BYTES:
+            raise ProxyBodyTooLarge(f"请求体超过 {_MAX_PROXY_BODY_BYTES} 字节上限")
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _is_streaming_messages_request(request: Request, body: bytes) -> bool:
@@ -226,10 +273,17 @@ def _filtered_headers(
     *,
     response: bool = False,
 ) -> list[tuple[str, str]]:
+    """Remove hop-by-hop headers, including Connection-nominated fields."""
+    header_items = list(headers)
     blocked = set(_HOP_BY_HOP_HEADERS)
+    for key, value in header_items:
+        if key.lower() == "connection":
+            blocked.update(
+                token.strip().lower() for token in value.split(",") if token.strip()
+            )
     blocked.add("content-length")
     if response:
         blocked.add("content-encoding")
     else:
         blocked.update({"accept-encoding", "host"})
-    return [(key, value) for key, value in headers if key.lower() not in blocked]
+    return [(key, value) for key, value in header_items if key.lower() not in blocked]
